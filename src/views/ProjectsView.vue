@@ -1,7 +1,32 @@
 <script setup lang="ts">
+import { reactive, ref } from 'vue'
 import { useWorkbenchStore } from '@/stores/workbench'
 
 const store = useWorkbenchStore()
+
+const showForm = ref(false)
+
+const form = reactive({
+  name: '',
+  description: '',
+})
+
+function submit() {
+  const name = form.name.trim()
+  if (!name) return
+  store.addProject({ name, description: form.description })
+  form.name = ''
+  form.description = ''
+  showForm.value = false
+}
+
+function statusBadge(status: string) {
+  return status === 'archived' ? 'badge badge-neutral' : 'badge badge-success'
+}
+
+function statusText(status: string) {
+  return status === 'archived' ? '已归档' : '进行中'
+}
 </script>
 
 <template>
@@ -9,21 +34,48 @@ const store = useWorkbenchStore()
     <section class="intro card">
       <div>
         <h2>项目进度</h2>
-        <p>不同项目做到哪一步、还有多少事情没完成，不用反复翻表格。</p>
+        <p>不同项目做到哪一步、还有多少事情没完成，不用反复翻表格。进度按项目下任务完成率自动计算。</p>
+      </div>
+      <button class="btn btn-primary" type="button" @click="showForm = !showForm">
+        {{ showForm ? '收起' : '新建项目' }}
+      </button>
+    </section>
+
+    <section v-if="showForm" class="card form-card">
+      <h3>新建项目</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label>项目名称</label>
+          <input
+            v-model="form.name"
+            placeholder="比如：客户交付 A"
+            @keydown.enter="submit"
+          />
+        </div>
+        <div class="field">
+          <label>项目描述（可选）</label>
+          <input v-model="form.description" placeholder="一句话说明项目目标" @keydown.enter="submit" />
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn" type="button" @click="showForm = false">取消</button>
+        <button class="btn btn-primary" type="button" :disabled="!form.name.trim()" @click="submit">
+          保存项目
+        </button>
       </div>
     </section>
 
-    <div class="grid">
+    <div v-if="store.projects.length" class="grid">
       <article v-for="project in store.projects" :key="project.id" class="card project">
         <div class="head">
           <h3>{{ project.name }}</h3>
-          <span class="badge badge-success">进行中</span>
+          <span :class="statusBadge(project.status)">{{ statusText(project.status) }}</span>
         </div>
-        <p>{{ project.description }}</p>
+        <p>{{ project.description ?? '暂无描述' }}</p>
         <div class="metrics">
           <div>
             <span>进度</span>
-            <strong>{{ project.progress }}%</strong>
+            <strong>{{ store.projectProgress(project.id) }}%</strong>
           </div>
           <div>
             <span>关联任务</span>
@@ -35,13 +87,18 @@ const store = useWorkbenchStore()
           </div>
         </div>
         <div class="bar">
-          <i :style="{ width: `${project.progress}%` }" />
+          <i :style="{ width: `${store.projectProgress(project.id)}%` }" />
         </div>
-        <RouterLink class="link" :to="{ path: '/tasks', query: { q: project.name } }">
+        <RouterLink class="link" :to="{ path: '/tasks', query: { projectId: project.id } }">
           查看任务 →
         </RouterLink>
       </article>
     </div>
+
+    <section v-else class="card empty-card">
+      <p class="empty-title">还没有项目</p>
+      <p class="empty-hint">点击右上角「新建项目」，先建一个项目，再往里面安排任务。</p>
+    </section>
   </div>
 </template>
 
@@ -54,6 +111,11 @@ const store = useWorkbenchStore()
 
 .intro {
   padding: 18px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .intro h2 {
@@ -65,6 +127,28 @@ const store = useWorkbenchStore()
   margin: 0;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.form-card {
+  padding: 16px;
+}
+
+.form-card h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
 }
 
 .grid {
@@ -133,8 +217,20 @@ const store = useWorkbenchStore()
   font-weight: 600;
 }
 
+.empty-card {
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.empty-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
 @media (max-width: 900px) {
-  .grid {
+  .grid,
+  .form-grid {
     grid-template-columns: 1fr;
   }
 }

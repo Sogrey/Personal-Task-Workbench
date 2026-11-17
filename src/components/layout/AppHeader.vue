@@ -18,6 +18,11 @@ function onSearch() {
   if (!q) return
   router.push({ path: '/tasks', query: { q } })
 }
+
+const avatarText = computed(() => {
+  const n = store.prefs.displayName.trim()
+  return n ? n.slice(0, 1) : '我'
+})
 </script>
 
 <template>
@@ -43,7 +48,7 @@ function onSearch() {
         <span v-if="store.reminderBadgeCount" class="dot">{{ store.reminderBadgeCount }}</span>
       </button>
       <div class="date">{{ dateText }}</div>
-      <div class="avatar" title="我">我</div>
+      <div class="avatar" :title="store.prefs.displayName">{{ avatarText }}</div>
     </div>
   </header>
 </template>

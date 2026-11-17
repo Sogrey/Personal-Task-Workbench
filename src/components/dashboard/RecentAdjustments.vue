@@ -33,6 +33,9 @@ const rows = computed(() => store.history.slice(0, 6))
             <td>{{ row.newValue }}</td>
             <td>{{ row.reason ?? '—' }}</td>
           </tr>
+          <tr v-if="!rows.length">
+            <td colspan="6" class="empty-hint">暂无调整记录</td>
+          </tr>
         </tbody>
       </table>
     </div>

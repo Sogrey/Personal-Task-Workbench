@@ -24,6 +24,7 @@ const title = computed(() => {
             <th>任务标题</th>
             <th>项目</th>
             <th>负责人</th>
+            <th>对接人</th>
             <th>截止</th>
             <th>状态</th>
           </tr>
@@ -34,11 +35,12 @@ const title = computed(() => {
             <td>{{ task.title }}</td>
             <td>{{ store.projectById(task.projectId)?.name ?? '—' }}</td>
             <td>{{ task.owner }}</td>
+            <td>{{ task.contact || '—' }}</td>
             <td>{{ formatShortDate(task.deadline ?? task.endAt) }}</td>
             <td><span :class="statusBadgeClass(task.status)">{{ statusLabel(task.status) }}</span></td>
           </tr>
           <tr v-if="!store.todayTasks.length">
-            <td colspan="6" class="empty-hint">暂无日程</td>
+            <td colspan="7" class="empty-hint">暂无日程</td>
           </tr>
         </tbody>
       </table>

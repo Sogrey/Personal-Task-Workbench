@@ -15,7 +15,6 @@ export interface Project {
   name: string
   description?: string
   status: ProjectStatus
-  progress: number
 }
 
 export interface Task {
@@ -24,6 +23,7 @@ export interface Task {
   description?: string
   projectId?: string
   owner: string
+  contact?: string
   startAt: string
   endAt: string
   deadline?: string

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   formatShortDate,
@@ -8,20 +8,27 @@ import {
   statusLabel,
   useWorkbenchStore,
 } from '@/stores/workbench'
-import type { TaskPriority, TaskStatus } from '@/types'
+import type { Task, TaskPriority, TaskStatus } from '@/types'
 import { statusBadgeClass } from '@/utils/status'
+import TaskDetailDrawer from '@/components/common/TaskDetailDrawer.vue'
 
 const store = useWorkbenchStore()
 const route = useRoute()
 
 const statusFilter = ref<TaskStatus | 'all'>('all')
+const priorityFilter = ref<TaskPriority | 'all'>('all')
+const dateFrom = ref('')
+const dateTo = ref('')
+const projectFilter = ref(typeof route.query.projectId === 'string' ? route.query.projectId : '')
 const tagFilter = ref(typeof route.query.tag === 'string' ? route.query.tag : '')
 const keyword = ref(typeof route.query.q === 'string' ? route.query.q : '')
 const showForm = ref(false)
+const editingId = ref<string | null>(null) // 非空 = 编辑模式，对应任务 id
 
 watch(
   () => route.query,
   (q) => {
+    if (typeof q.projectId === 'string') projectFilter.value = q.projectId
     if (typeof q.tag === 'string') tagFilter.value = q.tag
     if (typeof q.q === 'string') keyword.value = q.q
   },
@@ -30,7 +37,9 @@ watch(
 const form = reactive({
   title: '',
   projectId: store.projects[0]?.id ?? '',
-  owner: '小A',
+  owner: '苏朝恒',
+  contact: '',
+  description: '',
   startAt: `${store.today}T09:00`,
   endAt: `${store.today}T10:00`,
   deadline: `${store.today}T18:00`,
@@ -44,13 +53,35 @@ const filtered = computed(() => {
   return store.tasks.filter((t) => {
     if (t.status === 'cancelled') return false
     if (statusFilter.value !== 'all' && t.status !== statusFilter.value) return false
+    if (priorityFilter.value !== 'all' && t.priority !== priorityFilter.value) return false
+    if (projectFilter.value && t.projectId !== projectFilter.value) return false
     if (tagFilter.value && !t.tagIds.includes(tagFilter.value)) return false
+    // 按任务开始时间落在所选日期区间过滤
+    if (dateFrom.value && t.startAt.slice(0, 10) < dateFrom.value) return false
+    if (dateTo.value && t.startAt.slice(0, 10) > dateTo.value) return false
     if (!q) return true
     const project = store.projectById(t.projectId)?.name ?? ''
     const tagText = t.tagIds.map((id) => store.tagById(id)?.name ?? '').join(' ')
-    return [t.title, t.owner, project, tagText].join(' ').toLowerCase().includes(q)
+    return [t.title, t.owner, t.contact ?? '', t.description ?? '', project, tagText].join(' ').toLowerCase().includes(q)
   })
 })
+
+/** 详情抽屉 */
+const drawerTask = ref<Task | null>(null)
+
+function onView(task: Task) {
+  drawerTask.value = task
+}
+
+function onDrawerEdit(task: Task) {
+  drawerTask.value = null
+  startEdit(task)
+}
+
+function clearDateFilter() {
+  dateFrom.value = ''
+  dateTo.value = ''
+}
 
 function toggleTag(id: string) {
   const i = form.tagIds.indexOf(id)
@@ -58,20 +89,83 @@ function toggleTag(id: string) {
   else form.tagIds.push(id)
 }
 
+/** datetime-local 的值本身是本地时间（如 2026-11-16T09:00），直接存无时区后缀的本地 ISO，
+ * 与 store 的本地解析约定一致；不能用 toISOString()（会转成 UTC，显示时错位）。 */
+function toLocalIso(value: string, fallbackTime: string) {
+  if (value.length >= 16) return `${value.slice(0, 16)}:00`
+  return `${store.today}T${fallbackTime}`
+}
+
+/** 编辑模式：用任务现值回填表单（datetime-local 需 trim 秒） */
+function startEdit(task: Task) {
+  editingId.value = task.id
+  showForm.value = true
+  form.title = task.title
+  form.projectId = task.projectId ?? ''
+  form.owner = task.owner
+  form.contact = task.contact ?? ''
+  form.description = task.description ?? ''
+  form.startAt = task.startAt.slice(0, 16)
+  form.endAt = task.endAt.slice(0, 16)
+  form.deadline = (task.deadline ?? task.endAt).slice(0, 16)
+  form.priority = task.priority
+  form.status = task.status
+  form.tagIds = [...task.tagIds]
+  nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
+}
+
+function resetForm() {
+  editingId.value = null
+  form.title = ''
+  form.projectId = ''
+  form.owner = '苏朝恒'
+  form.contact = ''
+  form.description = ''
+  form.startAt = `${store.today}T09:00`
+  form.endAt = `${store.today}T10:00`
+  form.deadline = `${store.today}T18:00`
+  form.priority = 'medium'
+  form.status = 'pending'
+  form.tagIds = []
+}
+
+function toggleForm() {
+  if (showForm.value && editingId.value) {
+    // 编辑模式下点按钮 = 取消编辑
+    cancelEdit()
+  } else {
+    resetForm()
+    showForm.value = !showForm.value
+  }
+}
+
+function cancelEdit() {
+  showForm.value = false
+  editingId.value = null
+  resetForm()
+}
+
 function submit() {
   if (!form.title.trim()) return
-  store.addTask({
+  const payload = {
     title: form.title.trim(),
     projectId: form.projectId || undefined,
     owner: form.owner,
-    startAt: new Date(form.startAt).toISOString().slice(0, 19),
-    endAt: new Date(form.endAt).toISOString().slice(0, 19),
-    deadline: new Date(form.deadline).toISOString().slice(0, 19),
+    contact: form.contact.trim() || undefined,
+    description: form.description.trim() || undefined,
+    startAt: toLocalIso(form.startAt, '09:00:00'),
+    endAt: toLocalIso(form.endAt, '10:00:00'),
+    deadline: toLocalIso(form.deadline, '18:00:00'),
     priority: form.priority,
     status: form.status,
     tagIds: [...form.tagIds],
-  })
-  form.title = ''
+  }
+  if (editingId.value) {
+    store.updateTask(editingId.value, payload)
+  } else {
+    store.addTask(payload)
+  }
+  resetForm()
   showForm.value = false
 }
 </script>
@@ -88,32 +182,62 @@ function submit() {
           <option value="to_confirm">待确认</option>
           <option value="done">已完成</option>
         </select>
+        <select v-model="priorityFilter">
+          <option value="all">全部优先级</option>
+          <option value="low">低</option>
+          <option value="medium">中</option>
+          <option value="high">高</option>
+          <option value="urgent">紧急</option>
+        </select>
+        <select v-model="projectFilter">
+          <option value="">全部项目</option>
+          <option v-for="p in store.projects" :key="p.id" :value="p.id">{{ p.name }}</option>
+        </select>
         <select v-model="tagFilter">
           <option value="">全部标签</option>
           <option v-for="tag in store.tags" :key="tag.id" :value="tag.id">{{ tag.name }}</option>
         </select>
+        <div class="date-range">
+          <input v-model="dateFrom" type="date" title="开始日期" />
+          <span class="dash">–</span>
+          <input v-model="dateTo" type="date" title="结束日期" />
+          <button
+            v-if="dateFrom || dateTo"
+            class="btn btn-ghost clear-btn"
+            type="button"
+            title="清除日期筛选"
+            @click="clearDateFilter"
+          >
+            ✕
+          </button>
+        </div>
       </div>
-      <button class="btn btn-primary" type="button" @click="showForm = !showForm">
-        {{ showForm ? '收起' : '新建任务' }}
+      <button class="btn btn-primary" type="button" @click="toggleForm">
+        {{ showForm ? (editingId ? '取消编辑' : '收起') : '新建任务' }}
       </button>
     </div>
 
     <section v-if="showForm" class="card form-card">
-      <h3>新建任务</h3>
+      <h3>{{ editingId ? '编辑任务' : '新建任务' }}</h3>
       <div class="form-grid">
         <div class="field">
           <label>标题</label>
           <input v-model="form.title" placeholder="今天要做什么？" />
         </div>
         <div class="field">
-          <label>项目</label>
+          <label>项目（可选）</label>
           <select v-model="form.projectId">
+            <option value="">不关联项目</option>
             <option v-for="p in store.projects" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
         </div>
         <div class="field">
           <label>负责人</label>
           <input v-model="form.owner" />
+        </div>
+        <div class="field">
+          <label>对接人（可选）</label>
+          <input v-model="form.contact" placeholder="客户/协作方联系人" />
         </div>
         <div class="field">
           <label>优先级</label>
@@ -144,6 +268,14 @@ function submit() {
             <option value="to_confirm">待确认</option>
           </select>
         </div>
+        <div class="field span-all">
+          <label>备注（可选）</label>
+          <textarea
+            v-model="form.description"
+            rows="2"
+            placeholder="补充说明、注意事项、沟通记录等"
+          />
+        </div>
       </div>
       <div class="tag-pick">
         <button
@@ -158,8 +290,10 @@ function submit() {
         </button>
       </div>
       <div class="actions">
-        <button class="btn" type="button" @click="showForm = false">取消</button>
-        <button class="btn btn-primary" type="button" @click="submit">保存到工作台</button>
+        <button class="btn" type="button" @click="cancelEdit">{{ editingId ? '取消编辑' : '取消' }}</button>
+        <button class="btn btn-primary" type="button" :disabled="!form.title.trim()" @click="submit">
+          {{ editingId ? '保存修改' : '保存到工作台' }}
+        </button>
       </div>
     </section>
 
@@ -175,6 +309,7 @@ function submit() {
               <th>任务</th>
               <th>项目</th>
               <th>负责人</th>
+              <th>对接人</th>
               <th>时间</th>
               <th>截止</th>
               <th>优先级</th>
@@ -186,6 +321,7 @@ function submit() {
             <tr v-for="task in filtered" :key="task.id">
               <td>
                 <div class="title">{{ task.title }}</div>
+                <p v-if="task.description" class="note">{{ task.description }}</p>
                 <div class="tags">
                   <span
                     v-for="id in task.tagIds"
@@ -199,6 +335,7 @@ function submit() {
               </td>
               <td>{{ store.projectById(task.projectId)?.name ?? '—' }}</td>
               <td>{{ task.owner }}</td>
+              <td>{{ task.contact || '—' }}</td>
               <td>{{ formatTimeRange(task.startAt, task.endAt) }}</td>
               <td>{{ formatShortDate(task.deadline ?? task.endAt) }}</td>
               <td>{{ priorityLabel(task.priority) }}</td>
@@ -206,22 +343,38 @@ function submit() {
                 <span :class="statusBadgeClass(task.status)">{{ statusLabel(task.status) }}</span>
               </td>
               <td>
-                <select
-                  class="status-select"
-                  :value="task.status"
-                  @change="store.updateTaskStatus(task.id, ($event.target as HTMLSelectElement).value as TaskStatus)"
-                >
-                  <option value="pending">待处理</option>
-                  <option value="in_progress">进行中</option>
-                  <option value="to_confirm">待确认</option>
-                  <option value="done">已完成</option>
-                </select>
+                <div class="row-actions">
+                  <button class="btn btn-ghost view-btn" type="button" @click="onView(task)">查看</button>
+                  <button
+                    class="btn btn-ghost edit-btn"
+                    type="button"
+                    :class="{ editing: editingId === task.id }"
+                    @click="startEdit(task)"
+                  >
+                    {{ editingId === task.id ? '编辑中' : '编辑' }}
+                  </button>
+                  <select
+                    class="status-select"
+                    :value="task.status"
+                    @change="store.updateTaskStatus(task.id, ($event.target as HTMLSelectElement).value as TaskStatus)"
+                  >
+                    <option value="pending">待处理</option>
+                    <option value="in_progress">进行中</option>
+                    <option value="to_confirm">待确认</option>
+                    <option value="done">已完成</option>
+                  </select>
+                </div>
               </td>
+            </tr>
+            <tr v-if="!filtered.length">
+              <td colspan="9" class="empty-hint">暂无符合条件的任务，点击右上角「新建任务」开始安排</td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
+
+    <TaskDetailDrawer :task="drawerTask" @close="drawerTask = null" @edit="onDrawerEdit" />
   </div>
 </template>
 
@@ -272,6 +425,10 @@ function submit() {
   gap: 12px;
 }
 
+.form-grid .span-all {
+  grid-column: 1 / -1;
+}
+
 .tag-pick {
   display: flex;
   flex-wrap: wrap;
@@ -306,6 +463,72 @@ function submit() {
 .title {
   font-weight: 600;
   margin-bottom: 6px;
+}
+
+.note {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  max-width: 380px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.view-btn {
+  padding: 0 10px;
+  height: 32px;
+  font-size: 12px;
+  color: var(--info);
+}
+
+.date-range {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.date-range input {
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 8px;
+  background: #fff;
+  font-size: 12px;
+  color: var(--text);
+  width: 128px;
+}
+
+.dash {
+  color: var(--text-secondary);
+}
+
+.clear-btn {
+  height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.edit-btn {
+  padding: 0 10px;
+  height: 32px;
+  font-size: 12px;
+  color: var(--primary);
+}
+
+.edit-btn.editing {
+  background: var(--primary-soft);
+  color: #166534;
+  font-weight: 600;
 }
 
 .tags {

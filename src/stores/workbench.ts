@@ -1,8 +1,77 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
-import { historyRecords as seedHistory, projects as seedProjects, tags as seedTags, tasks as seedTasks, WORKBENCH_TODAY } from '@/data/mock'
-import type { HistoryRecord, Project, ReminderItem, StatCard, Tag, Task, TaskStatus } from '@/types'
+import { DEFAULT_TAGS } from '@/data/defaults'
+import type { HistoryRecord, Project, ProjectStatus, ReminderItem, StatCard, Tag, Task, TaskStatus } from '@/types'
 import { toLocalDateKey } from '@/utils/date'
+
+const STORAGE_KEY = 'workbench-data-v1'
+
+interface PersistedState {
+  tasks: Task[]
+  projects: Project[]
+  tags: Tag[]
+  history: HistoryRecord[]
+}
+
+export interface WorkbenchPrefs {
+  displayName: string
+  workStart: string
+  workEnd: string
+  dueSoonHours: number
+}
+
+const DEFAULT_PREFS: WorkbenchPrefs = {
+  displayName: '我',
+  workStart: '08:00',
+  workEnd: '18:00',
+  dueSoonHours: 24,
+}
+
+const PREFS_KEY = 'workbench-prefs-v1'
+
+function loadPrefs(): WorkbenchPrefs {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY)
+    if (!raw) return { ...DEFAULT_PREFS }
+    const parsed = JSON.parse(raw) as Partial<WorkbenchPrefs>
+    return {
+      displayName: typeof parsed.displayName === 'string' && parsed.displayName ? parsed.displayName : DEFAULT_PREFS.displayName,
+      workStart: typeof parsed.workStart === 'string' && parsed.workStart ? parsed.workStart : DEFAULT_PREFS.workStart,
+      workEnd: typeof parsed.workEnd === 'string' && parsed.workEnd ? parsed.workEnd : DEFAULT_PREFS.workEnd,
+      dueSoonHours: typeof parsed.dueSoonHours === 'number' && parsed.dueSoonHours > 0 ? parsed.dueSoonHours : DEFAULT_PREFS.dueSoonHours,
+    }
+  } catch {
+    return { ...DEFAULT_PREFS }
+  }
+}
+
+function loadPersisted(): Partial<PersistedState> | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<PersistedState>
+    if (
+      !Array.isArray(parsed.tasks) ||
+      !Array.isArray(parsed.projects) ||
+      !Array.isArray(parsed.tags) ||
+      !Array.isArray(parsed.history)
+    ) {
+      return null
+    }
+    return parsed
+  } catch {
+    // 数据损坏时回到默认空数据
+    return null
+  }
+}
+
+function savePersisted(state: PersistedState) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+  } catch {
+    // 存储不可用（隐私模式/配额满）时静默降级为会话内存
+  }
+}
 
 function parseDate(value: string) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -46,14 +115,48 @@ function startOfWeek(date: Date) {
 }
 
 export const useWorkbenchStore = defineStore('workbench', () => {
-  const today = ref(WORKBENCH_TODAY)
-  const selectedDate = ref(WORKBENCH_TODAY)
-  const weekAnchor = ref(WORKBENCH_TODAY)
+  const realToday = toLocalDateKey(new Date())
+  const today = ref(realToday)
+  const selectedDate = ref(realToday)
+  const weekAnchor = ref(realToday)
 
-  const tags = ref<Tag[]>([...seedTags])
-  const projects = ref<Project[]>([...seedProjects])
-  const tasks = ref<Task[]>([...seedTasks])
-  const history = ref<HistoryRecord[]>([...seedHistory])
+  const persisted = loadPersisted()
+  const tags = ref<Tag[]>(persisted?.tags?.length ? persisted.tags : [...DEFAULT_TAGS])
+  const projects = ref<Project[]>(persisted?.projects ?? [])
+  const tasks = ref<Task[]>(persisted?.tasks ?? [])
+  const history = ref<HistoryRecord[]>(persisted?.history ?? [])
+
+  /** 偏好设置（设置页维护，持久化独立 key） */
+  const prefs = ref<WorkbenchPrefs>(loadPrefs())
+
+  function savePrefs(next: WorkbenchPrefs) {
+    prefs.value = { ...next }
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(next))
+    } catch {
+      // 存储不可用时仅会话内生效
+    }
+  }
+
+  /** 工作时段起止小时数（甘特/周视图时间轴范围） */
+  const workHours = computed(() => {
+    const s = Number(prefs.value.workStart.slice(0, 2)) || 0
+    const e = Number(prefs.value.workEnd.slice(0, 2))
+    return { start: s, end: e > s ? e : 24 }
+  })
+
+  watch(
+    [tasks, projects, tags, history],
+    () => {
+      savePersisted({
+        tasks: tasks.value,
+        projects: projects.value,
+        tags: tags.value,
+        history: history.value,
+      })
+    },
+    { deep: true },
+  )
 
   const todayDate = computed(() => parseDate(today.value))
 
@@ -119,7 +222,6 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       key: 'today',
       label: '今日待办',
       value: todayTodoCount.value,
-      hint: '较昨日 +2',
       tone: 'success',
     },
     {
@@ -138,7 +240,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       key: 'conflict',
       label: '时间冲突',
       value: conflictPairs.value.length,
-      tone: 'danger',
+      tone: 'warning',
     },
   ])
 
@@ -173,7 +275,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       if (t.status === 'done') return false
       const deadline = parseDate(t.deadline ?? t.endAt)
       const diff = deadline.getTime() - todayDate.value.getTime()
-      return diff >= 0 && diff <= 24 * 60 * 60 * 1000
+      return diff >= 0 && diff <= prefs.value.dueSoonHours * 60 * 60 * 1000
     })
 
     const followUps = activeTasks.value.filter(
@@ -188,7 +290,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
         description: `${overdueTasks.value.length} 项已逾期，需优先处理`,
         severity: 'danger',
         taskIds: overdueTasks.value.map((t) => t.id),
-        progress: Math.min(100, overdueTasks.value.length * 35 + 10),
+        progress: Math.min(100, overdueTasks.value.length * 35),
       },
       {
         id: 'r-follow',
@@ -203,7 +305,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
         id: 'r-due',
         type: 'due_soon',
         title: '今日临期交付',
-        description: `${dueSoon.length} 项将在 24 小时内到期`,
+        description: `${dueSoon.length} 项将在 ${prefs.value.dueSoonHours} 小时内到期`,
         severity: 'warning',
         taskIds: dueSoon.map((t) => t.id),
         progress: Math.min(100, dueSoon.length * 20),
@@ -212,8 +314,8 @@ export const useWorkbenchStore = defineStore('workbench', () => {
         id: 'r-conflict',
         type: 'conflict',
         title: '时间冲突',
-        description: `${conflictPairs.value.length} 组日程存在重叠`,
-        severity: 'danger',
+        description: `${conflictPairs.value.length} 组日程时间重叠（任务可并行，留意安排）`,
+        severity: 'warning',
         taskIds: [...conflictTaskIds.value],
         progress: Math.min(100, conflictPairs.value.length * 30),
       },
@@ -230,6 +332,42 @@ export const useWorkbenchStore = defineStore('workbench', () => {
 
   function tagById(id: string) {
     return tags.value.find((t) => t.id === id)
+  }
+
+  /** 标签被多少个任务引用（含已完成） */
+  function tagUsageCount(id: string) {
+    return tasks.value.filter((t) => t.tagIds.includes(id)).length
+  }
+
+  function addTag(name: string, color: string) {
+    const trimmed = name.trim()
+    if (!trimmed) return null
+    if (tags.value.some((t) => t.name === trimmed)) return null
+    const tag: Tag = { id: `tag-${Date.now()}`, name: trimmed, color }
+    tags.value.push(tag)
+    return tag
+  }
+
+  function updateTag(id: string, patch: { name?: string; color?: string }) {
+    const tag = tags.value.find((t) => t.id === id)
+    if (!tag) return false
+    const name = patch.name?.trim()
+    if (name && tags.value.some((t) => t.name === name && t.id !== id)) return false
+    if (name) tag.name = name
+    if (patch.color) tag.color = patch.color
+    return true
+  }
+
+  /** 删除标签：被任务引用时禁止（返回原因） */
+  function deleteTag(id: string): { ok: boolean; reason?: string } {
+    const used = tagUsageCount(id)
+    if (used > 0) {
+      return { ok: false, reason: `${used} 个任务正在使用该标签，请先在任务中移除` }
+    }
+    const idx = tags.value.findIndex((t) => t.id === id)
+    if (idx < 0) return { ok: false }
+    tags.value.splice(idx, 1)
+    return { ok: true }
   }
 
   function setSelectedDate(isoDate: string) {
@@ -265,6 +403,68 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     })
   }
 
+  const TASK_FIELD_LABELS: Partial<Record<keyof Task, string>> = {
+    title: '任务名称',
+    description: '备注',
+    projectId: '所属项目',
+    owner: '负责人',
+    contact: '对接人',
+    startAt: '开始时间',
+    endAt: '结束时间',
+    deadline: '截止时间',
+    priority: '优先级',
+    status: '状态',
+    tagIds: '标签',
+  }
+
+  /** 编辑任务：逐字段比对，变化字段写入历史（含标签增删），时间/项目/标签显示为可读文本 */
+  function updateTask(taskId: string, patch: Partial<Task>, reason?: string) {
+    const task = tasks.value.find((t) => t.id === taskId)
+    if (!task) return
+    const records: HistoryRecord[] = []
+    let changed = false
+
+    for (const [key, value] of Object.entries(patch)) {
+      const k = key as keyof Task
+      if (k === 'id' || k === 'createdAt' || k === 'updatedAt') continue
+      const oldVal = task[k]
+      // 比较前归一：undefined 与空串视为相同（可选字段清空场景），数组排序后比较
+      const normalize = (v: unknown) =>
+        v === undefined ? '' : Array.isArray(v) ? [...v].sort().join(',') : v
+      if (normalize(oldVal) === normalize(value)) continue
+      changed = true
+      const labelMap: Partial<Record<keyof Task, (v: never) => string>> = {
+        priority: (v) => priorityLabel(v as Task['priority']),
+        status: (v) => statusLabel(v as TaskStatus),
+        startAt: (v) => (v ? formatDateTimeReadable(v as string) : '—'),
+        endAt: (v) => (v ? formatDateTimeReadable(v as string) : '—'),
+        deadline: (v) => (v ? formatDateTimeReadable(v as string) : '—'),
+        projectId: (v) => projectById(v as string)?.name ?? '未关联',
+        tagIds: (v) =>
+          (v as string[]).length
+            ? (v as string[]).map((id) => tagById(id)?.name ?? id).join('、')
+            : '无',
+      }
+      const oldText = labelMap[k] ? labelMap[k]!(oldVal as never) : String(normalize(oldVal)) || '—'
+      const newText = labelMap[k] ? labelMap[k]!(value as never) : String(normalize(value)) || '—'
+      records.push({
+        id: `h-${Date.now()}-${records.length}`,
+        time: formatNow(),
+        taskId: task.id,
+        taskTitle: (patch.title as string) ?? task.title,
+        field: TASK_FIELD_LABELS[k] ?? k,
+        oldValue: oldText,
+        newValue: newText,
+        reason: reason ?? '工作台编辑任务',
+      })
+    }
+
+    if (!changed) return
+    Object.assign(task, patch)
+    task.updatedAt = new Date().toISOString()
+    history.value.unshift(...records)
+  }
+
   function addTask(payload: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>) {
     const now = new Date().toISOString()
     const task: Task = {
@@ -287,6 +487,26 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     return task
   }
 
+  function addProject(payload: { name: string; description?: string; status?: ProjectStatus }) {
+    const project: Project = {
+      id: `proj-${Date.now()}`,
+      name: payload.name,
+      description: payload.description?.trim() || undefined,
+      status: payload.status ?? 'active',
+    }
+    projects.value.unshift(project)
+    return project
+  }
+
+  function resetLocalData() {
+    tasks.value = []
+    projects.value = []
+    history.value = []
+    tags.value = [...DEFAULT_TAGS]
+    selectedDate.value = today.value
+    weekAnchor.value = today.value
+  }
+
   function tasksByProject(projectId: string) {
     return activeTasks.value.filter((t) => t.projectId === projectId)
   }
@@ -295,10 +515,21 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     return tasksByProject(projectId).filter((t) => t.status !== 'done').length
   }
 
+  /** 项目进度按任务完成率派生（已完成 / 非取消总数），无任务时为 0 */
+  function projectProgress(projectId: string) {
+    const list = tasksByProject(projectId)
+    if (list.length === 0) return 0
+    const done = list.filter((t) => t.status === 'done').length
+    return Math.round((done / list.length) * 100)
+  }
+
   return {
     today,
     selectedDate,
     weekAnchor,
+    prefs,
+    savePrefs,
+    workHours,
     tags,
     projects,
     tasks,
@@ -317,13 +548,21 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     conflictGroups,
     projectById,
     tagById,
+    tagUsageCount,
+    addTag,
+    updateTag,
+    deleteTag,
     setSelectedDate,
     shiftWeek,
     goTodayWeek,
     updateTaskStatus,
+    updateTask,
     addTask,
+    addProject,
+    resetLocalData,
     tasksByProject,
     unfinishedByProject,
+    projectProgress,
   }
 })
 
@@ -360,4 +599,12 @@ export function formatTimeRange(startAt: string, endAt: string) {
 export function formatShortDate(iso: string) {
   const d = new Date(iso)
   return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+/** 无时区 ISO（YYYY-MM-DDTHH:mm:ss）→ "M/D HH:mm" 可读文本，用于历史记录 */
+function formatDateTimeReadable(v: string): string {
+  const d = new Date(v)
+  if (Number.isNaN(d.getTime())) return v
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }

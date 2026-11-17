@@ -4,7 +4,7 @@ import { useWorkbenchStore } from '@/stores/workbench'
 
 const store = useWorkbenchStore()
 
-const items = computed(() => store.reminders.slice(0, 3))
+const items = computed(() => store.reminders.slice(0, 4))
 </script>
 
 <template>

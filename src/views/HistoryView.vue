@@ -37,6 +37,9 @@ const store = useWorkbenchStore()
               <td>{{ row.newValue }}</td>
               <td>{{ row.reason ?? '—' }}</td>
             </tr>
+            <tr v-if="!store.history.length">
+              <td colspan="6" class="empty-hint">暂无调整记录，任务状态变化与新建会自动留痕</td>
+            </tr>
           </tbody>
         </table>
       </div>

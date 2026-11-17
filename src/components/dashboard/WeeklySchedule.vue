@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { formatTimeRange, useWorkbenchStore } from '@/stores/workbench'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { formatTimeRange, statusLabel, useWorkbenchStore } from '@/stores/workbench'
 import type { Task } from '@/types'
+import { statusBadgeClass } from '@/utils/status'
 import { toLocalDateKey } from '@/utils/date'
 
 const store = useWorkbenchStore()
@@ -22,6 +24,22 @@ const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六'
 
 const colorPalette = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899']
 
+/** 布局后的色块：同一天时间重叠的任务阶梯层叠（左错右齐），上层块置顶可读；
+ *  cluster 为该块所属重叠簇的全部任务（点击色块时展开该簇完整列表，解决下层块收不到鼠标事件的问题） */
+interface LaidBlock {
+  task: Task
+  top: string
+  height: string
+  left: string
+  width: string
+  zIndex: number
+  conflict: boolean
+  color: string
+  background: string
+  cluster: Task[]
+  badge: boolean
+}
+
 function dayKey(d: Date) {
   return toLocalDateKey(d)
 }
@@ -30,30 +48,103 @@ function isToday(d: Date) {
   return dayKey(d) === store.today
 }
 
-function tasksForDay(d: Date) {
-  const key = dayKey(d)
-  return store.weekTasks.filter((t) => t.startAt.slice(0, 10) === key)
+/** 簇 + 列分配：重叠链归为一簇，簇内列号决定层叠偏移（列 i 左偏 i*12px，右缘对齐）
+ *  上层块几乎全宽可读，下层块时间不同处自然露出，hover 置顶 */
+const STACK_STEP_PX = 12
+
+function layoutDay(tasks: Task[]): LaidBlock[] {
+  const sorted = [...tasks].sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
+  const result: LaidBlock[] = []
+  let cluster: Task[] = []
+  let clusterEnd = 0
+
+  function pushBlock(task: Task, colIndex: number, clusterTasks: Task[], showBadge: boolean) {
+    const start = new Date(task.startAt)
+    const end = new Date(task.endAt)
+    const startMin = (start.getHours() - HOUR_START) * 60 + start.getMinutes()
+    const endMin = (end.getHours() - HOUR_START) * 60 + end.getMinutes()
+    const total = (HOUR_END - HOUR_START) * 60
+    const top = Math.max(0, (startMin / total) * 100)
+    const height = Math.max(6, ((endMin - startMin) / total) * 100)
+    const leftPx = 4 + colIndex * STACK_STEP_PX
+    const rightPx = 4
+    const conflict = store.conflictTaskIds.has(task.id)
+    const baseColor = colorPalette[Math.abs(hash(task.id)) % colorPalette.length] ?? '#3b82f6'
+    const color = conflict ? '#f59e0b' : baseColor
+    result.push({
+      task,
+      top: `${top}%`,
+      height: `${height}%`,
+      left: `${leftPx}px`,
+      width: `calc(100% - ${leftPx + rightPx}px)`,
+      zIndex: colIndex + 1,
+      conflict,
+      color,
+      background: conflict ? 'rgba(245,158,11,0.14)' : `${color}22`,
+      cluster: clusterTasks,
+      badge: showBadge,
+    })
+  }
+
+  function flush() {
+    if (!cluster.length) return
+    const clusterTasks = [...cluster]
+    if (cluster.length === 1) {
+      pushBlock(cluster[0]!, 0, clusterTasks, false)
+    } else {
+      // 每列记录占用结束时间，找第一个已空闲的列复用，否则新开一列（列号即层号）
+      const colEnds: number[] = []
+      const colOf = new Map<string, number>()
+      for (const task of cluster) {
+        const s = +new Date(task.startAt)
+        const e = +new Date(task.endAt)
+        let idx = colEnds.findIndex((end) => end <= s)
+        if (idx < 0) {
+          idx = colEnds.length
+          colEnds.push(e)
+        } else {
+          colEnds[idx] = e
+        }
+        colOf.set(task.id, idx)
+      }
+      // 「+N」徽章：给最高层的块（列号最大；并列时取最后处理的）
+      const maxCol = Math.max(...colOf.values())
+      let badgeAssigned = false
+      for (let i = cluster.length - 1; i >= 0; i--) {
+        const task = cluster[i]!
+        const idx = colOf.get(task.id) ?? 0
+        const showBadge = !badgeAssigned && idx === maxCol
+        if (showBadge) badgeAssigned = true
+        pushBlock(task, idx, clusterTasks, showBadge)
+      }
+    }
+    cluster = []
+    clusterEnd = 0
+  }
+
+  for (const task of sorted) {
+    const s = +new Date(task.startAt)
+    const e = +new Date(task.endAt)
+    if (cluster.length && s >= clusterEnd) flush()
+    cluster.push(task)
+    clusterEnd = Math.max(clusterEnd, e)
+  }
+  flush()
+  return result
 }
 
-function blockStyle(task: Task) {
-  const start = new Date(task.startAt)
-  const end = new Date(task.endAt)
-  const startMin = (start.getHours() - HOUR_START) * 60 + start.getMinutes()
-  const endMin = (end.getHours() - HOUR_START) * 60 + end.getMinutes()
-  const total = (HOUR_END - HOUR_START) * 60
-  const top = Math.max(0, (startMin / total) * 100)
-  const height = Math.max(8, ((endMin - startMin) / total) * 100)
-  const conflict = store.conflictTaskIds.has(task.id)
-  const color = conflict
-    ? '#ef4444'
-    : colorPalette[Math.abs(hash(task.id)) % colorPalette.length]
-  return {
-    top: `${top}%`,
-    height: `${height}%`,
-    background: conflict ? 'rgba(239,68,68,0.12)' : `${color}22`,
-    borderColor: color,
-    color: conflict ? '#b91c1c' : '#1f2937',
+const laidByDay = computed(() => {
+  const map = new Map<string, LaidBlock[]>()
+  for (const day of store.weekDays) {
+    const key = dayKey(day)
+    const dayTasks = store.weekTasks.filter((t) => t.startAt.slice(0, 10) === key)
+    map.set(key, layoutDay(dayTasks))
   }
+  return map
+})
+
+function blocksForDay(d: Date) {
+  return laidByDay.value.get(dayKey(d)) ?? []
 }
 
 function hash(s: string) {
@@ -65,6 +156,90 @@ function hash(s: string) {
 function selectDay(d: Date) {
   store.setSelectedDate(dayKey(d))
 }
+
+/** E 方案：自定义悬浮信息卡（替代原生 title，窄块也能看全量信息） */
+interface HoverCard {
+  block: LaidBlock
+  x: number
+  y: number
+}
+
+const hoverCard = ref<HoverCard | null>(null)
+let showTimer: number | undefined
+
+function onBlockEnter(e: MouseEvent, block: LaidBlock) {
+  const el = e.currentTarget as HTMLElement
+  const rect = el.getBoundingClientRect()
+  window.clearTimeout(showTimer)
+  showTimer = window.setTimeout(() => {
+    hoverCard.value = {
+      block,
+      x: Math.max(8, Math.min(rect.right + 8, window.innerWidth - 286)),
+      y: Math.max(8, Math.min(rect.top, window.innerHeight - 230)),
+    }
+  }, 250)
+}
+
+function onBlockLeave() {
+  window.clearTimeout(showTimer)
+  hoverCard.value = null
+}
+
+/** 点击色块：鼠标右侧展开该重叠簇的完整任务列表（下层块收不到 hover，用点击补齐） */
+interface ClickPanel {
+  tasks: Task[]
+  currentId: string
+  x: number
+  y: number
+}
+
+const clickPanel = ref<ClickPanel | null>(null)
+const router = useRouter()
+
+function onBlockClick(e: MouseEvent, block: LaidBlock) {
+  e.stopPropagation()
+  window.clearTimeout(showTimer)
+  hoverCard.value = null
+  const tasks = [...block.cluster].sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
+  const panelH = Math.min(120 + tasks.length * 64, 420)
+  clickPanel.value = {
+    tasks,
+    currentId: block.task.id,
+    x: Math.max(8, Math.min(e.clientX + 16, window.innerWidth - 316)),
+    y: Math.max(8, Math.min(e.clientY - 12, window.innerHeight - panelH - 16)),
+  }
+}
+
+function closePanel() {
+  clickPanel.value = null
+}
+
+function openTaskDetail(task: Task) {
+  clickPanel.value = null
+  router.push({ path: '/tasks', query: { q: task.title } })
+}
+
+function onGlobalPointerDown(e: MouseEvent) {
+  if (!clickPanel.value) return
+  const panelEl = document.querySelector('.click-panel')
+  if (panelEl?.contains(e.target as Node)) return
+  closePanel()
+}
+
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') closePanel()
+}
+
+onMounted(() => {
+  document.addEventListener('mousedown', onGlobalPointerDown)
+  document.addEventListener('keydown', onGlobalKeydown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onGlobalPointerDown)
+  document.removeEventListener('keydown', onGlobalKeydown)
+  window.clearTimeout(showTimer)
+})
 </script>
 
 <template>
@@ -101,18 +276,91 @@ function selectDay(d: Date) {
         <div class="day-body">
           <div v-for="h in hours" :key="h" class="slot" />
           <div
-            v-for="task in tasksForDay(day)"
-            :key="task.id"
+            v-for="block in blocksForDay(day)"
+            :key="block.task.id"
             class="block"
-            :class="{ conflict: store.conflictTaskIds.has(task.id) }"
-            :style="blockStyle(task)"
-            :title="`${task.title} ${formatTimeRange(task.startAt, task.endAt)}`"
+            :class="{ conflict: block.conflict }"
+            :style="{
+              top: block.top,
+              height: block.height,
+              left: block.left,
+              width: block.width,
+              zIndex: block.zIndex,
+              background: block.background,
+              borderColor: block.color,
+            }"
+            @mouseenter="onBlockEnter($event, block)"
+            @mouseleave="onBlockLeave"
+            @click="onBlockClick($event, block)"
           >
-            <div class="block-title">{{ task.title }}</div>
-            <div class="block-meta">{{ formatTimeRange(task.startAt, task.endAt) }} · {{ task.owner }}</div>
+            <span v-if="block.badge" class="stack-badge" title="点击查看全部重叠任务">+{{ block.cluster.length - 1 }}</span>
+            <div class="block-title">{{ block.task.title }}</div>
+            <div class="block-meta">{{ formatTimeRange(block.task.startAt, block.task.endAt) }} · {{ block.task.owner }}</div>
           </div>
         </div>
       </div>
+    </div>
+
+    <div
+      v-if="hoverCard"
+      class="hover-card"
+      :style="{ left: `${hoverCard.x}px`, top: `${hoverCard.y}px` }"
+    >
+      <div class="hc-head">
+        <strong>{{ hoverCard.block.task.title }}</strong>
+        <span :class="statusBadgeClass(hoverCard.block.task.status)">
+          {{ statusLabel(hoverCard.block.task.status) }}
+        </span>
+      </div>
+      <div class="hc-row">
+        <span>时间</span>
+        <span>{{ formatTimeRange(hoverCard.block.task.startAt, hoverCard.block.task.endAt) }}</span>
+      </div>
+      <div class="hc-row">
+        <span>负责人</span>
+        <span>
+          {{ hoverCard.block.task.owner }}
+          <template v-if="hoverCard.block.task.contact"> · 对接：{{ hoverCard.block.task.contact }}</template>
+        </span>
+      </div>
+      <div class="hc-row">
+        <span>项目</span>
+        <span>{{ store.projectById(hoverCard.block.task.projectId)?.name ?? '未关联' }}</span>
+      </div>
+      <div v-if="hoverCard.block.task.description" class="hc-desc">{{ hoverCard.block.task.description }}</div>
+      <div v-if="hoverCard.block.conflict" class="hc-warn">时间重叠 · 任务可并行，留意安排</div>
+    </div>
+
+    <!-- 点击色块展开的重叠簇任务列表：下层块收不到 hover，点击任一层都能看全量 -->
+    <div
+      v-if="clickPanel"
+      class="click-panel"
+      :style="{ left: `${clickPanel.x}px`, top: `${clickPanel.y}px` }"
+    >
+      <div class="cp-head">
+        <strong>时间重叠 · {{ clickPanel.tasks.length }} 项</strong>
+        <button class="cp-close" type="button" aria-label="关闭" @click="closePanel">✕</button>
+      </div>
+      <ul class="cp-list">
+        <li
+          v-for="task in clickPanel.tasks"
+          :key="task.id"
+          :class="{ current: task.id === clickPanel.currentId }"
+          @click="openTaskDetail(task)"
+        >
+          <div class="cp-main">
+            <strong>{{ task.title }}</strong>
+            <span :class="statusBadgeClass(task.status)">{{ statusLabel(task.status) }}</span>
+          </div>
+          <div class="cp-meta">
+            {{ formatTimeRange(task.startAt, task.endAt) }} · {{ task.owner }}
+            <template v-if="task.contact"> · 对接：{{ task.contact }}</template>
+            · {{ store.projectById(task.projectId)?.name ?? '未关联' }}
+          </div>
+          <div v-if="task.description" class="cp-note">{{ task.description }}</div>
+        </li>
+      </ul>
+      <div class="cp-tip">点击条目可跳转任务管理查看</div>
     </div>
   </section>
 </template>
@@ -201,19 +449,57 @@ function selectDay(d: Date) {
 
 .block {
   position: absolute;
-  left: 4px;
-  right: 4px;
   border-left: 3px solid;
   border-radius: 6px;
   padding: 4px 6px;
   overflow: hidden;
   font-size: 11px;
   line-height: 1.3;
-  z-index: 1;
+  color: #1f2937;
+  container-type: inline-size;
+  cursor: pointer;
+}
+
+/* 悬浮置顶：任何层级的块都能完整看到 */
+.block:hover {
+  z-index: 100 !important;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.16);
+}
+
+/* 层叠后的窄块：隐藏时间/负责人行，只留标题（完整信息看悬浮卡） */
+@container (max-width: 76px) {
+  .block-meta {
+    display: none;
+  }
+
+.stack-badge {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #b45309;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.6;
+  border: 1px solid rgba(245, 158, 11, 0.5);
+}
+
+.block-title {
+    font-size: 10px;
+  }
 }
 
 .block.conflict {
-  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.35);
+  color: #b45309;
+  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.45);
+}
+
+.block.conflict:hover {
+  box-shadow:
+    inset 0 0 0 1px rgba(245, 158, 11, 0.45),
+    0 4px 14px rgba(15, 23, 42, 0.16);
 }
 
 .block-title {
@@ -228,5 +514,169 @@ function selectDay(d: Date) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.hover-card {
+  position: fixed;
+  z-index: 1000;
+  width: 270px;
+  padding: 12px 14px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 32px rgba(15, 23, 42, 0.16);
+  font-size: 13px;
+  color: var(--text);
+  pointer-events: none;
+}
+
+.hc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.hc-head strong {
+  font-size: 14px;
+}
+
+.hc-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+}
+
+.hc-row > span:first-child {
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.hc-warn {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--warning-soft);
+  color: #b45309;
+  font-size: 12px;
+}
+
+.hc-desc {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cp-note {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.click-panel {
+  position: fixed;
+  z-index: 1001;
+  width: 304px;
+  max-height: 440px;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.18);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.cp-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  color: #b45309;
+}
+
+.cp-head strong {
+  font-size: 13px;
+}
+
+.cp-close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.cp-close:hover {
+  background: #f3f4f6;
+  color: var(--text);
+}
+
+.cp-list {
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.cp-list li {
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.cp-list li + li {
+  margin-top: 4px;
+}
+
+.cp-list li:hover {
+  background: #f1f5f9;
+}
+
+.cp-list li.current {
+  background: var(--warning-soft);
+  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.4);
+}
+
+.cp-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.cp-main strong {
+  font-size: 13px;
+}
+
+.cp-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.cp-tip {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: center;
 }
 </style>

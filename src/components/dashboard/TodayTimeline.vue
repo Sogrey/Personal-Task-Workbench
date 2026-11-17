@@ -30,7 +30,11 @@ const title = computed(() => {
             <span>{{ store.projectById(task.projectId)?.name ?? '未归属项目' }}</span>
             <span>·</span>
             <span>{{ task.owner }}</span>
-            <span v-if="store.conflictTaskIds.has(task.id)" class="badge badge-danger">冲突</span>
+            <template v-if="task.contact">
+              <span>·</span>
+              <span>对接：{{ task.contact }}</span>
+            </template>
+            <span v-if="store.conflictTaskIds.has(task.id)" class="badge badge-warning">时间重叠</span>
           </div>
         </div>
       </article>

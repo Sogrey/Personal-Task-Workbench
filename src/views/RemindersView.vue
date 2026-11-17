@@ -49,10 +49,13 @@ const store = useWorkbenchStore()
     </section>
 
     <section class="card panel">
-      <div class="card-title"><span>时间冲突组</span></div>
+      <div class="card-title">
+        <span>时间重叠（可并行）</span>
+        <span class="muted">仅提醒，任务支持并行处理</span>
+      </div>
       <div v-if="store.conflictPairs.length" class="conflicts">
         <article v-for="(pair, idx) in store.conflictPairs" :key="idx" class="conflict">
-          <h4>冲突 {{ idx + 1 }} · {{ pair.owner }}</h4>
+          <h4>重叠 {{ idx + 1 }} · {{ pair.owner }}</h4>
           <ul>
             <li v-for="task in pair.tasks" :key="task.id">
               <strong>{{ task.title }}</strong>
@@ -61,7 +64,7 @@ const store = useWorkbenchStore()
           </ul>
         </article>
       </div>
-      <div v-else class="empty-hint">当前无时间冲突</div>
+      <div v-else class="empty-hint">当前无时间重叠</div>
     </section>
   </div>
 </template>
@@ -123,6 +126,11 @@ const store = useWorkbenchStore()
   color: #b91c1c;
 }
 
+.rem[data-severity='warning'] .count {
+  background: var(--warning-soft);
+  color: #b45309;
+}
+
 .bar {
   margin-top: 12px;
   height: 8px;
@@ -152,10 +160,11 @@ const store = useWorkbenchStore()
 .conflict {
   padding: 12px;
   border-radius: 10px;
-  background: var(--danger-soft);
+  background: var(--warning-soft);
 }
 
 .conflict h4 {
+  color: #b45309;
   margin: 0 0 8px;
 }
 
