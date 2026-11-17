@@ -1,13 +1,18 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { formatTimeRange, priorityLabel, statusLabel, useWorkbenchStore } from '@/stores/workbench'
 import type { Task } from '@/types'
 import { statusBadgeClass } from '@/utils/status'
 
-defineProps<{ task: Task | null }>()
+const props = defineProps<{ task: Task | null }>()
 const emit = defineEmits<{ close: []; edit: [task: Task] }>()
 
 const store = useWorkbenchStore()
+
+/** 当前任务的最近进展说明（响应式：任务切换/更新自动刷新） */
+const latestNote = computed(() => {
+  return props.task ? store.latestProgressNote(props.task.id) : undefined
+})
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
@@ -27,7 +32,8 @@ function fmtFull(iso?: string) {
 
 <template>
   <Teleport to="body">
-    <Transition name="drawer">
+    <!-- appear：URL 直达（?task=id）挂载即有值时也播放展开动画 -->
+    <Transition name="drawer" appear>
       <div v-if="task" class="drawer-root" @mousedown.self="emit('close')">
         <aside class="drawer" role="dialog" aria-label="任务详情">
           <header class="head">
@@ -51,7 +57,17 @@ function fmtFull(iso?: string) {
               </div>
               <div class="row">
                 <span class="k">所属项目</span>
-                <span class="v">{{ store.projectById(task.projectId)?.name ?? '未关联' }}</span>
+                <span class="v">
+                  <RouterLink
+                    v-if="task.projectId"
+                    class="text-link"
+                    :to="{ path: '/tasks', query: { projectId: task.projectId } }"
+                    :title="`查看项目「${store.projectById(task.projectId)?.name}」下的任务`"
+                  >
+                    {{ store.projectById(task.projectId)?.name }}
+                  </RouterLink>
+                  <template v-else>未关联</template>
+                </span>
               </div>
               <div class="row">
                 <span class="k">优先级</span>
@@ -61,20 +77,25 @@ function fmtFull(iso?: string) {
                 <span class="k">标签</span>
                 <span class="v tags">
                   <template v-if="task.tagIds.length">
-                    <span
+                    <RouterLink
                       v-for="id in task.tagIds"
                       :key="id"
                       class="tag-chip"
+                      :to="{ path: '/tasks', query: { tag: id } }"
                       :style="{ background: store.tagById(id)?.color ?? '#94a3b8' }"
+                      :title="`按标签「${store.tagById(id)?.name ?? id}」筛选任务`"
                     >
                       {{ store.tagById(id)?.name ?? id }}
-                    </span>
+                    </RouterLink>
                   </template>
                   <template v-else>—</template>
                 </span>
               </div>
               <div v-if="store.conflictTaskIds.has(task.id)" class="warn-tip">
                 时间重叠 · 任务可并行，留意安排
+              </div>
+              <div v-if="task.delayed" class="warn-tip danger-tip">
+                已确认延期 · {{ task.delayNote || '未按计划开始' }}
               </div>
             </section>
 
@@ -96,6 +117,15 @@ function fmtFull(iso?: string) {
                 <span class="k">截止</span>
                 <span class="v">{{ fmtFull(task.deadline) }}</span>
               </div>
+              <div v-if="task.completedAt" class="row">
+                <span class="k">实际完成</span>
+                <span class="v done-text">{{ fmtFull(task.completedAt) }}</span>
+              </div>
+            </section>
+
+            <section v-if="latestNote" class="group">
+              <h4>最近进展</h4>
+              <p class="desc note-text">{{ latestNote }}</p>
             </section>
 
             <section class="group">
@@ -248,6 +278,25 @@ function fmtFull(iso?: string) {
   color: #fff;
   border-radius: 999px;
   padding: 1px 8px;
+  cursor: pointer;
+}
+
+.tag-chip:hover {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
+}
+
+.warn-tip.danger-tip {
+  background: var(--danger-soft);
+  color: #b91c1c;
+}
+
+.done-text {
+  color: #047857;
+  font-weight: 600;
+}
+
+.note-text {
+  white-space: normal;
 }
 
 .warn-tip {

@@ -68,7 +68,15 @@ function statusText(status: string) {
     <div v-if="store.projects.length" class="grid">
       <article v-for="project in store.projects" :key="project.id" class="card project">
         <div class="head">
-          <h3>{{ project.name }}</h3>
+          <h3>
+            <RouterLink
+              class="p-link"
+              :to="{ path: '/tasks', query: { projectId: project.id } }"
+              :title="`查看「${project.name}」下的任务`"
+            >
+              {{ project.name }}
+            </RouterLink>
+          </h3>
           <span :class="statusBadge(project.status)">{{ statusText(project.status) }}</span>
         </div>
         <p>{{ project.description ?? '暂无描述' }}</p>
@@ -171,6 +179,10 @@ function statusText(status: string) {
 .head h3 {
   margin: 0;
   font-size: 16px;
+}
+
+.p-link:hover {
+  text-decoration: underline;
 }
 
 .project > p {

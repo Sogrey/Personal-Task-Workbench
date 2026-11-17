@@ -23,11 +23,24 @@ const title = computed(() => {
         <div class="time">{{ formatTimeRange(task.startAt, task.endAt) }}</div>
         <div class="body">
           <div class="row">
-            <strong>{{ task.title }}</strong>
+            <RouterLink
+              class="t-link"
+              :to="{ path: '/tasks', query: { task: task.id } }"
+              :title="`查看「${task.title}」详情`"
+            >
+              {{ task.title }}
+            </RouterLink>
             <span :class="statusBadgeClass(task.status)">{{ statusLabel(task.status) }}</span>
           </div>
           <div class="meta">
-            <span>{{ store.projectById(task.projectId)?.name ?? '未归属项目' }}</span>
+            <RouterLink
+              v-if="task.projectId"
+              class="text-link"
+              :to="{ path: '/tasks', query: { projectId: task.projectId } }"
+            >
+              {{ store.projectById(task.projectId)?.name }}
+            </RouterLink>
+            <span v-else>未归属项目</span>
             <span>·</span>
             <span>{{ task.owner }}</span>
             <template v-if="task.contact">
@@ -78,8 +91,18 @@ const title = computed(() => {
   gap: 8px;
 }
 
-.row strong {
+.row strong,
+.t-link {
   font-size: 13px;
+}
+
+.t-link {
+  font-weight: 700;
+  color: var(--info);
+}
+
+.t-link:hover {
+  text-decoration: underline;
 }
 
 .meta {

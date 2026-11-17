@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   formatShortDate,
   formatTimeRange,
@@ -14,6 +14,7 @@ import TaskDetailDrawer from '@/components/common/TaskDetailDrawer.vue'
 
 const store = useWorkbenchStore()
 const route = useRoute()
+const router = useRouter()
 
 const statusFilter = ref<TaskStatus | 'all'>('all')
 const priorityFilter = ref<TaskPriority | 'all'>('all')
@@ -66,17 +67,59 @@ const filtered = computed(() => {
   })
 })
 
-/** 详情抽屉 */
+/** 详情抽屉：支持 URL ?task=<id> 直达（其它页面链接跳入时自动展开），
+ *  关闭抽屉时同步移除该参数，刷新页面仍可恢复 */
 const drawerTask = ref<Task | null>(null)
+const taskMissing = ref(false)
+let missingTimer: number | undefined
+
+watch(
+  () => route.query.task,
+  (id) => {
+    if (typeof id === 'string' && id) {
+      const found = store.tasks.find((t) => t.id === id)
+      if (found) {
+        drawerTask.value = found
+        taskMissing.value = false
+      } else {
+        // 任务已删除（历史记录等入口可能指向不存在的任务）
+        drawerTask.value = null
+        taskMissing.value = true
+        window.clearTimeout(missingTimer)
+        missingTimer = window.setTimeout(() => (taskMissing.value = false), 5000)
+        router.replace({ query: { ...route.query, task: undefined } })
+      }
+    } else {
+      // query.task 被移除（关闭抽屉 / 抽屉内跳转筛选 / 浏览器后退） → 同步收起抽屉
+      drawerTask.value = null
+    }
+  },
+  { immediate: true },
+)
+
+function clearTaskQuery() {
+  if (typeof route.query.task === 'string') {
+    router.replace({ query: { ...route.query, task: undefined } })
+  }
+}
 
 function onView(task: Task) {
   drawerTask.value = task
+  router.replace({ query: { ...route.query, task: task.id } })
+}
+
+function closeDrawer() {
+  drawerTask.value = null
+  clearTaskQuery()
 }
 
 function onDrawerEdit(task: Task) {
   drawerTask.value = null
+  clearTaskQuery()
   startEdit(task)
 }
+
+onBeforeUnmount(() => window.clearTimeout(missingTimer))
 
 function clearDateFilter() {
   dateFrom.value = ''
@@ -320,20 +363,37 @@ function submit() {
           <tbody>
             <tr v-for="task in filtered" :key="task.id">
               <td>
-                <div class="title">{{ task.title }}</div>
+                <div class="title tappable" role="link" tabindex="0" @click="onView(task)" @keydown.enter="onView(task)">
+                  {{ task.title }}
+                </div>
                 <p v-if="task.description" class="note">{{ task.description }}</p>
                 <div class="tags">
-                  <span
+                  <button
                     v-for="id in task.tagIds"
                     :key="id"
+                    type="button"
                     class="mini-tag"
+                    :class="{ active: tagFilter === id }"
                     :style="{ background: store.tagById(id)?.color }"
+                    :title="`按标签「${store.tagById(id)?.name ?? id}」筛选`"
+                    @click="tagFilter = tagFilter === id ? '' : id"
                   >
                     {{ store.tagById(id)?.name }}
-                  </span>
+                  </button>
                 </div>
               </td>
-              <td>{{ store.projectById(task.projectId)?.name ?? '—' }}</td>
+              <td>
+                <button
+                  v-if="task.projectId"
+                  type="button"
+                  class="link-btn"
+                  :title="`按项目「${store.projectById(task.projectId)?.name}」筛选`"
+                  @click="projectFilter = projectFilter === task.projectId ? '' : (task.projectId ?? '')"
+                >
+                  {{ store.projectById(task.projectId)?.name }}
+                </button>
+                <template v-else>—</template>
+              </td>
               <td>{{ task.owner }}</td>
               <td>{{ task.contact || '—' }}</td>
               <td>{{ formatTimeRange(task.startAt, task.endAt) }}</td>
@@ -341,6 +401,7 @@ function submit() {
               <td>{{ priorityLabel(task.priority) }}</td>
               <td>
                 <span :class="statusBadgeClass(task.status)">{{ statusLabel(task.status) }}</span>
+                <span v-if="task.delayed" class="badge badge-danger delay-badge">延期</span>
               </td>
               <td>
                 <div class="row-actions">
@@ -374,7 +435,9 @@ function submit() {
       </div>
     </section>
 
-    <TaskDetailDrawer :task="drawerTask" @close="drawerTask = null" @edit="onDrawerEdit" />
+    <div v-if="taskMissing" class="missing-hint card">未找到对应的任务，可能已被删除或数据未同步</div>
+
+    <TaskDetailDrawer :task="drawerTask" @close="closeDrawer" @edit="onDrawerEdit" />
   </div>
 </template>
 
@@ -465,6 +528,22 @@ function submit() {
   margin-bottom: 6px;
 }
 
+.title.tappable {
+  color: var(--info);
+  cursor: pointer;
+}
+
+.title.tappable:hover {
+  text-decoration: underline;
+}
+
+.missing-hint {
+  padding: 10px 16px;
+  font-size: 13px;
+  color: #b45309;
+  background: var(--warning-soft);
+}
+
 .note {
   margin: 0 0 6px;
   font-size: 12px;
@@ -531,6 +610,10 @@ function submit() {
   font-weight: 600;
 }
 
+.delay-badge {
+  margin-left: 6px;
+}
+
 .tags {
   display: flex;
   flex-wrap: wrap;
@@ -542,6 +625,13 @@ function submit() {
   color: #fff;
   border-radius: 999px;
   padding: 1px 7px;
+  border: none;
+  cursor: pointer;
+}
+
+.mini-tag.active {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
 }
 
 @media (max-width: 1100px) {

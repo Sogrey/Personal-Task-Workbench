@@ -30,8 +30,12 @@ const store = useWorkbenchStore()
           </thead>
           <tbody>
             <tr v-for="row in store.history" :key="row.id">
-              <td>{{ row.time }}</td>
-              <td>{{ row.taskTitle }}</td>
+            <td>{{ row.time }}</td>
+            <td>
+              <RouterLink class="text-link" :to="{ path: '/tasks', query: { task: row.taskId } }" :title="`查看「${row.taskTitle}」详情`">
+                {{ row.taskTitle }}
+              </RouterLink>
+            </td>
               <td>{{ row.field }}</td>
               <td>{{ row.oldValue }}</td>
               <td>{{ row.newValue }}</td>

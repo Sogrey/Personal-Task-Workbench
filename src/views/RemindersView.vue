@@ -36,7 +36,11 @@ const store = useWorkbenchStore()
         </thead>
         <tbody>
           <tr v-for="task in store.overdueTasks" :key="task.id">
-            <td>{{ task.title }}</td>
+            <td>
+              <RouterLink class="text-link" :to="{ path: '/tasks', query: { task: task.id } }" :title="`查看「${task.title}」详情`">
+                {{ task.title }}
+              </RouterLink>
+            </td>
             <td>{{ task.owner }}</td>
             <td>{{ task.deadline ?? task.endAt }}</td>
             <td><span :class="statusBadgeClass(task.status)">{{ statusLabel(task.status) }}</span></td>
@@ -58,7 +62,13 @@ const store = useWorkbenchStore()
           <h4>重叠 {{ idx + 1 }} · {{ pair.owner }}</h4>
           <ul>
             <li v-for="task in pair.tasks" :key="task.id">
-              <strong>{{ task.title }}</strong>
+              <RouterLink
+                class="text-link"
+                :to="{ path: '/tasks', query: { task: task.id } }"
+                :title="`查看「${task.title}」详情`"
+              >
+                {{ task.title }}
+              </RouterLink>
               <span>{{ formatTimeRange(task.startAt, task.endAt) }}</span>
             </li>
           </ul>

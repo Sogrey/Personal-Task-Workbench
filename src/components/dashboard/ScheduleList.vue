@@ -32,8 +32,21 @@ const title = computed(() => {
         <tbody>
           <tr v-for="(task, idx) in store.todayTasks" :key="task.id">
             <td>{{ idx + 1 }}</td>
-            <td>{{ task.title }}</td>
-            <td>{{ store.projectById(task.projectId)?.name ?? '—' }}</td>
+            <td>
+              <RouterLink class="text-link" :to="{ path: '/tasks', query: { task: task.id } }" :title="`查看「${task.title}」详情`">
+                {{ task.title }}
+              </RouterLink>
+            </td>
+            <td>
+              <RouterLink
+                v-if="task.projectId"
+                class="text-link"
+                :to="{ path: '/tasks', query: { projectId: task.projectId } }"
+              >
+                {{ store.projectById(task.projectId)?.name }}
+              </RouterLink>
+              <template v-else>—</template>
+            </td>
             <td>{{ task.owner }}</td>
             <td>{{ task.contact || '—' }}</td>
             <td>{{ formatShortDate(task.deadline ?? task.endAt) }}</td>

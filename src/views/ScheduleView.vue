@@ -23,7 +23,7 @@ import MiniCalendar from '@/components/dashboard/MiniCalendar.vue'
             <li>顶行为周一至周日；每天下方标注工作时段的起始、午间、结束三个时刻</li>
             <li>任务条起点 = 开始时间，终点 = 结束时间；条内文字为完整起止时刻</li>
             <li>跨天任务（如 11/17 15:00 – 11/18 11:00）会连续跨越对应的日期列</li>
-            <li>点击左侧任务名可跳转任务管理页查看与编辑详情</li>
+            <li>点击左侧任务名可跳转任务管理页并展开任务详情</li>
           </ul>
         </div>
       </section>
@@ -34,7 +34,9 @@ import MiniCalendar from '@/components/dashboard/MiniCalendar.vue'
           <span class="muted">图例 · 操作提示</span>
         </div>
         <div class="legend">
-          <span><i class="sw dot-blue" />普通任务</span>
+          <span><i class="sw dot-blue" />待处理</span>
+          <span><i class="sw dot-green" />进行中</span>
+          <span><i class="sw dot-purple" />待确认</span>
           <span><i class="sw dot-orange" />时间重叠（可并行）</span>
           <span><i class="sw dot-gray" />已完成</span>
           <span><i class="sw dot-line" />现在时刻</span>
@@ -68,7 +70,7 @@ import MiniCalendar from '@/components/dashboard/MiniCalendar.vue'
 
 .top-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 7fr) minmax(0, 7fr) minmax(260px, 4fr);
   gap: 14px;
   align-items: stretch;
 }
@@ -147,6 +149,18 @@ import MiniCalendar from '@/components/dashboard/MiniCalendar.vue'
   background: rgba(245, 158, 11, 0.16);
   border: 1px solid rgba(245, 158, 11, 0.5);
   border-left: 3px solid #f59e0b;
+}
+
+.dot-green {
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(16, 185, 129, 0.5);
+  border-left: 3px solid #10b981;
+}
+
+.dot-purple {
+  background: rgba(139, 92, 246, 0.16);
+  border: 1px solid rgba(139, 92, 246, 0.5);
+  border-left: 3px solid #8b5cf6;
 }
 
 .dot-gray {

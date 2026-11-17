@@ -27,7 +27,11 @@ const rows = computed(() => store.history.slice(0, 6))
         <tbody>
           <tr v-for="row in rows" :key="row.id">
             <td>{{ row.time }}</td>
-            <td>{{ row.taskTitle }}</td>
+            <td>
+              <RouterLink class="text-link" :to="{ path: '/tasks', query: { task: row.taskId } }" :title="`查看「${row.taskTitle}」详情`">
+                {{ row.taskTitle }}
+              </RouterLink>
+            </td>
             <td>{{ row.field }}</td>
             <td>{{ row.oldValue }}</td>
             <td>{{ row.newValue }}</td>
