@@ -50,6 +50,29 @@ a {
   text-decoration: none;
 }
 
+/* 关联跳转链接：静态文字升级为可点击（任务→详情抽屉、项目/标签→筛选） */
+.text-link {
+  color: var(--info);
+  cursor: pointer;
+}
+
+.text-link:hover {
+  text-decoration: underline;
+}
+
+button.link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--info);
+  cursor: pointer;
+}
+
+button.link-btn:hover {
+  text-decoration: underline;
+}
+
 button,
 input,
 select,
