@@ -32,6 +32,14 @@ export interface Task {
   tagIds: string[]
   createdAt: string
   updatedAt: string
+  /** 实际完成时间（本地无时区 ISO）；done 时必有，重开自动清空；旧数据加载时从历史反推 */
+  completedAt?: string
+  /** 延期标识（闭环确认“未开始”时打标，不改动计划时间） */
+  delayed?: boolean
+  /** 延期说明 */
+  delayNote?: string
+  /** 已确认提前开始（A2 保留后不再重复追问） */
+  startConfirmed?: boolean
 }
 
 export interface HistoryRecord {

@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { formatTimeRange, statusLabel, useWorkbenchStore } from '@/stores/workbench'
 import type { Task } from '@/types'
-import { statusBadgeClass } from '@/utils/status'
+import { CONFLICT_COLOR, STATUS_COLORS, statusBadgeClass } from '@/utils/status'
 import { toLocalDateKey } from '@/utils/date'
 
 const store = useWorkbenchStore()
@@ -22,7 +22,14 @@ const weekLabel = computed(() => {
 
 const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
-const colorPalette = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899']
+/** 色块配色：状态专属色（待处理蓝/进行中绿/待确认紫/已完成灰度）；
+ *  时间重叠固定橙色且优先；已完成叠加文字灰度 */
+function blockColors(task: Task, conflict: boolean) {
+  const done = task.status === 'done'
+  const color = conflict ? CONFLICT_COLOR : (STATUS_COLORS[task.status] ?? STATUS_COLORS.pending)
+  const bg = done ? 'rgba(148, 163, 184, 0.16)' : conflict ? 'rgba(245,158,11,0.14)' : `${color}22`
+  return { color, background: bg }
+}
 
 /** 布局后的色块：同一天时间重叠的任务阶梯层叠（左错右齐），上层块置顶可读；
  *  cluster 为该块所属重叠簇的全部任务（点击色块时展开该簇完整列表，解决下层块收不到鼠标事件的问题） */
@@ -34,6 +41,7 @@ interface LaidBlock {
   width: string
   zIndex: number
   conflict: boolean
+  done: boolean
   color: string
   background: string
   cluster: Task[]
@@ -69,8 +77,7 @@ function layoutDay(tasks: Task[]): LaidBlock[] {
     const leftPx = 4 + colIndex * STACK_STEP_PX
     const rightPx = 4
     const conflict = store.conflictTaskIds.has(task.id)
-    const baseColor = colorPalette[Math.abs(hash(task.id)) % colorPalette.length] ?? '#3b82f6'
-    const color = conflict ? '#f59e0b' : baseColor
+    const { color, background } = blockColors(task, conflict)
     result.push({
       task,
       top: `${top}%`,
@@ -79,8 +86,9 @@ function layoutDay(tasks: Task[]): LaidBlock[] {
       width: `calc(100% - ${leftPx + rightPx}px)`,
       zIndex: colIndex + 1,
       conflict,
+      done: task.status === 'done',
       color,
-      background: conflict ? 'rgba(245,158,11,0.14)' : `${color}22`,
+      background,
       cluster: clusterTasks,
       badge: showBadge,
     })
@@ -147,12 +155,6 @@ function blocksForDay(d: Date) {
   return laidByDay.value.get(dayKey(d)) ?? []
 }
 
-function hash(s: string) {
-  let h = 0
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0
-  return h
-}
-
 function selectDay(d: Date) {
   store.setSelectedDate(dayKey(d))
 }
@@ -216,7 +218,7 @@ function closePanel() {
 
 function openTaskDetail(task: Task) {
   clickPanel.value = null
-  router.push({ path: '/tasks', query: { q: task.title } })
+  router.push({ path: '/tasks', query: { task: task.id } })
 }
 
 function onGlobalPointerDown(e: MouseEvent) {
@@ -279,7 +281,7 @@ onBeforeUnmount(() => {
             v-for="block in blocksForDay(day)"
             :key="block.task.id"
             class="block"
-            :class="{ conflict: block.conflict }"
+            :class="{ conflict: block.conflict, done: block.done }"
             :style="{
               top: block.top,
               height: block.height,
@@ -360,7 +362,7 @@ onBeforeUnmount(() => {
           <div v-if="task.description" class="cp-note">{{ task.description }}</div>
         </li>
       </ul>
-      <div class="cp-tip">点击条目可跳转任务管理查看</div>
+      <div class="cp-tip">点击条目可在任务管理页展开详情</div>
     </div>
   </section>
 </template>
@@ -494,6 +496,17 @@ onBeforeUnmount(() => {
 .block.conflict {
   color: #b45309;
   box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.45);
+}
+
+/* 已完成：整块灰度弱化 */
+.block.done {
+  color: #64748b;
+  opacity: 0.88;
+}
+
+.block.done .block-title,
+.block.done .block-meta {
+  color: #64748b;
 }
 
 .block.conflict:hover {

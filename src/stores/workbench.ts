@@ -122,9 +122,20 @@ export const useWorkbenchStore = defineStore('workbench', () => {
 
   const persisted = loadPersisted()
   const tags = ref<Tag[]>(persisted?.tags?.length ? persisted.tags : [...DEFAULT_TAGS])
+  /** 旧数据迁移：done 任务无 completedAt 时从历史留痕反推（最后一次完成动作时间，再退 updatedAt）。
+   *  迁移结果随持久化 watch 写回 localStorage，下次加载不再重复。 */
+  const migratedHistory = persisted?.history ?? []
+  for (const task of persisted?.tasks ?? []) {
+    if (task.status === 'done' && !task.completedAt) {
+      const rec = [...migratedHistory]
+        .reverse()
+        .find((h) => h.taskId === task.id && h.field === '状态变更' && h.newValue === '已完成')
+      task.completedAt = rec ? rec.time.replace(' ', 'T') : task.updatedAt
+    }
+  }
   const projects = ref<Project[]>(persisted?.projects ?? [])
   const tasks = ref<Task[]>(persisted?.tasks ?? [])
-  const history = ref<HistoryRecord[]>(persisted?.history ?? [])
+  const history = ref<HistoryRecord[]>(migratedHistory)
 
   /** 偏好设置（设置页维护，持久化独立 key） */
   const prefs = ref<WorkbenchPrefs>(loadPrefs())
@@ -391,6 +402,16 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     const old = task.status
     task.status = status
     task.updatedAt = new Date().toISOString()
+    // 完成写实际完成时间；重开/取消清空（归因由 closedLoop 重新确认）
+    if (status === 'done') task.completedAt = toLocalIsoNow()
+    else if (task.completedAt || task.delayed) {
+      // 状态离开 done 时保留延期标识，但清完成时间；回到 pending 视为未延迟重置
+      task.completedAt = undefined
+      if (status === 'pending') {
+        task.delayed = false
+        task.delayNote = undefined
+      }
+    }
     history.value.unshift({
       id: `h-${Date.now()}`,
       time: formatNow(),
@@ -401,6 +422,142 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       newValue: statusLabel(status),
       reason: '工作台手动更新',
     })
+  }
+
+  /** 本地无时区 ISO（不能用 toISOString，会转 UTC） */
+  function toLocalIsoNow() {
+    const d = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  }
+
+  /** ───────── 报告闭环动作（CL 用例，写入 history 便于审计） ───────── */
+
+  /** 确认完成：completedAt 支持补录指定日期（默认此刻）；已完成幂等（重复确认只更新时间） */
+  function completeTask(taskId: string, completedAt?: string) {
+    const task = tasks.value.find((t) => t.id === taskId)
+    if (!task) return
+    const at = (completedAt ?? '').trim()
+    // 接受 YYYY-MM-DD 或完整 ISO；仅日期时拼当前时分秒
+    const normalized = /^\d{4}-\d{2}-\d{2}$/.test(at) ? `${at}T${toLocalIsoNow().slice(11)}` : at || toLocalIsoNow()
+    const old = task.status
+    const oldAt = task.completedAt
+    task.status = 'done'
+    task.completedAt = normalized
+    task.delayed = false
+    task.delayNote = undefined
+    task.updatedAt = new Date().toISOString()
+    history.value.unshift({
+      id: `h-${Date.now()}`,
+      time: formatNow(),
+      taskId: task.id,
+      taskTitle: task.title,
+      field: old === 'done' ? '完成时间补录' : '状态变更',
+      oldValue: old === 'done' ? (oldAt ?? '—') : statusLabel(old),
+      newValue: old === 'done' ? normalized : statusLabel(task.status),
+      reason: '报告闭环确认',
+    })
+  }
+
+  /** 确认已开始（B1）：状态改进行中 + 可选进展说明 */
+  function markStarted(taskId: string, note?: string) {
+    const task = tasks.value.find((t) => t.id === taskId)
+    if (!task) return
+    const old = task.status
+    task.status = 'in_progress'
+    task.delayed = false
+    task.delayNote = undefined
+    task.updatedAt = new Date().toISOString()
+    history.value.unshift({
+      id: `h-${Date.now()}`,
+      time: formatNow(),
+      taskId: task.id,
+      taskTitle: task.title,
+      field: '闭环确认',
+      oldValue: statusLabel(old),
+      newValue: '进行中',
+      reason: '报告闭环确认 · 已开始',
+    })
+    if (note?.trim()) addProgressNote(taskId, note)
+  }
+
+  /** 确认延期（C1/B1 未开始分支）：仅打标，不改动计划时间 */
+  function markDelayed(taskId: string, note?: string) {
+    const task = tasks.value.find((t) => t.id === taskId)
+    if (!task || task.delayed) return
+    task.delayed = true
+    task.delayNote = note?.trim() || undefined
+    task.updatedAt = new Date().toISOString()
+    history.value.unshift({
+      id: `h-${Date.now()}`,
+      time: formatNow(),
+      taskId: task.id,
+      taskTitle: task.title,
+      field: '延期标识',
+      oldValue: '—',
+      newValue: note?.trim() || '未按计划开始',
+      reason: '报告闭环确认',
+    })
+  }
+
+  /** 采集进展说明（B2 可选 / C2 必要）：只写留痕不动状态 */
+  function addProgressNote(taskId: string, note: string) {
+    const text = note.trim()
+    if (!text) return
+    const task = tasks.value.find((t) => t.id === taskId)
+    if (!task) return
+    task.updatedAt = new Date().toISOString()
+    history.value.unshift({
+      id: `h-${Date.now()}`,
+      time: formatNow(),
+      taskId: task.id,
+      taskTitle: task.title,
+      field: '进展说明',
+      oldValue: '—',
+      newValue: text,
+      reason: '报告闭环采集',
+    })
+  }
+
+  /** 确认提前开工（A2 保留）或改回待处理（A2 修正）；保留后不再重复追问 */
+  function confirmEarlyStart(taskId: string, keep: boolean) {
+    const task = tasks.value.find((t) => t.id === taskId)
+    if (!task) return
+    const old = task.status
+    if (keep) {
+      task.startConfirmed = true
+      history.value.unshift({
+        id: `h-${Date.now()}`,
+        time: formatNow(),
+        taskId: task.id,
+        taskTitle: task.title,
+        field: '闭环确认',
+        oldValue: '未到计划开始',
+        newValue: '确认提前开始',
+        reason: '报告闭环确认',
+      })
+    } else {
+      task.status = 'pending'
+      task.updatedAt = new Date().toISOString()
+      history.value.unshift({
+        id: `h-${Date.now()}`,
+        time: formatNow(),
+        taskId: task.id,
+        taskTitle: task.title,
+        field: '状态变更',
+        oldValue: statusLabel(old),
+        newValue: statusLabel('pending'),
+        reason: '报告闭环确认 · 修正误标',
+      })
+    }
+  }
+
+  /** 任务最近一条进展说明（周报进行中展示） */
+  function latestProgressNote(taskId: string) {
+    const rec = history.value.find(
+      (h) => h.taskId === taskId && h.field === '进展说明' && h.newValue !== '—',
+    )
+    return rec?.newValue
   }
 
   const TASK_FIELD_LABELS: Partial<Record<keyof Task, string>> = {
@@ -563,6 +720,12 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     tasksByProject,
     unfinishedByProject,
     projectProgress,
+    completeTask,
+    markStarted,
+    markDelayed,
+    addProgressNote,
+    confirmEarlyStart,
+    latestProgressNote,
   }
 })
 

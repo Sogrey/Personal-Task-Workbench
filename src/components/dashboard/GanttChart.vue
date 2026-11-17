@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { formatTimeRange, statusLabel, useWorkbenchStore } from '@/stores/workbench'
 import type { Task } from '@/types'
-import { statusBadgeClass } from '@/utils/status'
+import { CONFLICT_COLOR, STATUS_COLORS, statusBadgeClass } from '@/utils/status'
 import { toLocalDateKey } from '@/utils/date'
 
 const store = useWorkbenchStore()
@@ -102,12 +102,13 @@ function barText(row: GanttRow) {
   const eTxt = `${day(e)} ${pad(e.getHours())}:${pad(e.getMinutes())}`
   return `${sTxt} – ${eTxt}`
 }
-/** 跨天条样式：周内连续分钟 → 百分比横向定位 */
+/** 跨天条样式：周内连续分钟 → 百分比横向定位；--bar 状态色驱动配色 */
 function barStyle(row: GanttRow) {
   const weekMin = 7 * 24 * 60
   const left = (row.offsetMin / weekMin) * 100
   const width = (row.durationMin / weekMin) * 100
-  return { left: `${left}%`, width: `${width}%` }
+  const color = row.conflict ? CONFLICT_COLOR : (STATUS_COLORS[row.task.status] ?? STATUS_COLORS.pending)
+  return { left: `${left}%`, width: `${width}%`, '--bar': color }
 }
 
 /** 「现在」竖线：周内当前位置百分比（仅本周内显示） */
@@ -175,7 +176,7 @@ function onBarLeave() {
 }
 
 function openTask(task: Task) {
-  router.push({ path: '/tasks', query: { q: task.title } })
+  router.push({ path: '/tasks', query: { task: task.id } })
 }
 
 onBeforeUnmount(() => window.clearTimeout(hoverTimer))
@@ -229,7 +230,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
             class="task-cell"
             :class="{ done: row.done, conflict: row.conflict }"
           >
-            <span class="t-title" @click="openTask(row.task)">{{ row.task.title }}</span>
+            <span class="t-title" :title="`查看「${row.task.title}」详情`" @click="openTask(row.task)">{{ row.task.title }}</span>
             <span class="t-sub">{{ barText(row) }}</span>
           </div>
         </div>
@@ -456,7 +457,8 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
 }
 
 .t-title:hover {
-  color: var(--primary);
+  color: var(--info);
+  text-decoration: underline;
 }
 
 .t-sub {
@@ -513,16 +515,16 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
   pointer-events: none;
 }
 
-/* 任务条：行内水平定位（左=开始，宽=时长） */
+/* 任务条：行内水平定位（左=开始，宽=时长）；按状态着色（待处理蓝/进行中绿/待确认紫/已完成灰） */
 .bar {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
   height: 56px;
   border-radius: 8px;
-  background: rgba(59, 130, 246, 0.14);
-  border: 1px solid rgba(59, 130, 246, 0.5);
-  border-left: 3px solid #3b82f6;
+  background: color-mix(in srgb, var(--bar, #3b82f6) 14%, white);
+  border: 1px solid color-mix(in srgb, var(--bar, #3b82f6) 50%, white);
+  border-left: 3px solid var(--bar, #3b82f6);
   color: #1f2937;
   display: flex;
   align-items: center;
@@ -536,16 +538,14 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
 }
 
 .bar.conflict {
-  background: rgba(245, 158, 11, 0.14);
-  border-color: rgba(245, 158, 11, 0.5);
-  border-left-color: #f59e0b;
+  --bar: #f59e0b;
 }
 
 .bar.done {
+  --bar: #94a3b8;
   background: #f1f5f9;
-  border-color: #cbd5e1;
-  border-left-color: #94a3b8;
   opacity: 0.8;
+  color: #64748b;
 }
 
 .bar:hover {

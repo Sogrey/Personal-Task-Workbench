@@ -46,6 +46,12 @@ const router = createRouter({
       meta: { title: '历史记录' },
     },
     {
+      path: '/report',
+      name: 'report',
+      component: () => import('../views/ReportView.vue'),
+      meta: { title: '工作报告' },
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('../views/SettingsView.vue'),
