@@ -307,7 +307,8 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
       </div>
     </div>
 
-    <div v-if="rows.length" class="gantt-wrap" ref="scrollBody">
+    <!-- FIX-10：无任务时头部（日期列/刻度）仍保留，正文区提示空态 -->
+    <div class="gantt-wrap" ref="scrollBody">
       <!-- 顶部日期行固定 -->
       <div class="gantt-head">
         <div class="corner">任务 / 时间</div>
@@ -333,7 +334,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
         </div>
       </div>
 
-      <div class="gantt-body">
+      <div v-if="rows.length" class="gantt-body">
         <!-- 左：任务名列 -->
         <div class="task-col">
           <div
@@ -385,9 +386,9 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
           />
         </div>
       </div>
-    </div>
 
-    <div v-else class="empty-hint">当前窗口暂无任务安排</div>
+      <div v-else class="head-empty-hint">当前窗口暂无任务安排</div>
+    </div>
 
     <div
       v-if="hoverCard"
@@ -433,6 +434,14 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* FIX-10：无任务窗口的空态提示（头部日期/刻度保留，仅正文区提示） */
+.head-empty-hint {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 /* FIX-9：跨度切换（3 天 / 7 天 / 整月） */
