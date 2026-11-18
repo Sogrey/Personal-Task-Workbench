@@ -92,13 +92,15 @@ function goToday() {
   void nextTick(() => scrollNowIntoView())
 }
 
-/** 切换跨度：以当前窗口中心日为定位日重新计算，保持浏览位置不跳变 */
+/** 切换跨度：以当前窗口中心日为定位日重新计算，保持浏览位置不跳变；
+ *  FIX-12：切换后视口自动对齐今天列居中（含今天时） */
 function setSpan(mode: SpanMode) {
   if (span.value === mode) return
   const days = visibleDays.value
   const center = days[Math.floor(days.length / 2)]?.date ?? new Date()
   span.value = mode
   windowStartDate.value = defaultWindowStart(center, mode)
+  void nextTick(() => scrollNowIntoView())
 }
 
 /** 列最小宽与网格变量（整月列多 → 横向滚动） */
@@ -183,12 +185,14 @@ const dayTicks = computed<DayTick[]>(() => {
   const { start, end } = store.workHours
   const mid = Math.round((start + end) / 2)
   const hours = [start, mid, end]
+  // FIX-12：整月窄列刻度简写（9/14/18），3/7 天列宽充裕保持 HH:00
+  const tickLabel = (h: number) => (span.value === 'month' ? `${h}` : `${String(h).padStart(2, '0')}:00`)
   const ticks: DayTick[] = []
   visibleDays.value.forEach((d, dayIdx) => {
     for (const h of hours) {
       ticks.push({
         key: `${d.key}-${h}`,
-        label: `${String(h).padStart(2, '0')}:00`,
+        label: tickLabel(h),
         pct: (dayIdx + dayMinuteToPct(h * 60) / 100) * (100 / windowDays.value),
       })
     }
@@ -233,6 +237,9 @@ const nowLineLeftPct = computed(() => {
 
 const scrollBody = ref<HTMLElement | null>(null)
 
+/** 任务名列宽度（与 .gantt-head 首列 180px 一致，滚动定位需计入） */
+const TASK_COL_W = 180
+
 function scrollNowIntoView() {
   const el = scrollBody.value
   if (!el) return
@@ -240,19 +247,20 @@ function scrollNowIntoView() {
   if (nowLeft !== null) {
     const grid = el.querySelector('.grid-col') as HTMLElement | null
     const gridW = grid?.clientWidth ?? el.clientWidth
-    el.scrollLeft = Math.max(0, (nowLeft / 100) * gridW - el.clientWidth * 0.4)
+    // FIX-12：今天列对齐视口正中；scrollLeft 相对滚动容器（含前置任务列），需计入 TASK_COL_W 偏移
+    el.scrollLeft = Math.max(0, TASK_COL_W + (nowLeft / 100) * gridW - el.clientWidth * 0.5)
   }
 }
 
 onMounted(() => {
-  // 首屏滚到今天附近（窗口不含今天时定位中间列）
+  // 首屏滚到今天附近（窗口不含今天时定位中间列）；scrollLeft 需计入前置任务列宽度
   const el = scrollBody.value
   const nowLeft = nowLineLeftPct.value ?? 50
   if (el) {
     requestAnimationFrame(() => {
       const grid = el.querySelector('.grid-col') as HTMLElement | null
       const gridW = grid?.clientWidth ?? el.clientWidth
-      el.scrollLeft = Math.max(0, (nowLeft / 100) * gridW - el.clientWidth * 0.4)
+      el.scrollLeft = Math.max(0, TASK_COL_W + (nowLeft / 100) * gridW - el.clientWidth * 0.5)
     })
   }
 })
