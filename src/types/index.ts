@@ -1,4 +1,5 @@
-export type TaskStatus = 'pending' | 'in_progress' | 'to_confirm' | 'done' | 'cancelled'
+/** FIX-6：delayed = 延期处理（用户确认未按计划开始/需顺延的状态位） */
+export type TaskStatus = 'pending' | 'in_progress' | 'to_confirm' | 'delayed' | 'done' | 'cancelled'
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent'
 export type ProjectStatus = 'active' | 'archived'
 export type ReminderType = 'overdue' | 'due_soon' | 'conflict' | 'follow_up'

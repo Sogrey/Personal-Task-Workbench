@@ -15,6 +15,8 @@ interface PersistedState {
 
 export interface WorkbenchPrefs {
   displayName: string
+  /** 任务默认负责人（新建表单预填、报告标题署名，FIX-2） */
+  ownerName: string
   workStart: string
   workEnd: string
   dueSoonHours: number
@@ -22,6 +24,7 @@ export interface WorkbenchPrefs {
 
 const DEFAULT_PREFS: WorkbenchPrefs = {
   displayName: '我',
+  ownerName: '苏朝恒',
   workStart: '08:00',
   workEnd: '18:00',
   dueSoonHours: 24,
@@ -36,6 +39,7 @@ function loadPrefs(): WorkbenchPrefs {
     const parsed = JSON.parse(raw) as Partial<WorkbenchPrefs>
     return {
       displayName: typeof parsed.displayName === 'string' && parsed.displayName ? parsed.displayName : DEFAULT_PREFS.displayName,
+      ownerName: typeof parsed.ownerName === 'string' && parsed.ownerName ? parsed.ownerName : DEFAULT_PREFS.ownerName,
       workStart: typeof parsed.workStart === 'string' && parsed.workStart ? parsed.workStart : DEFAULT_PREFS.workStart,
       workEnd: typeof parsed.workEnd === 'string' && parsed.workEnd ? parsed.workEnd : DEFAULT_PREFS.workEnd,
       dueSoonHours: typeof parsed.dueSoonHours === 'number' && parsed.dueSoonHours > 0 ? parsed.dueSoonHours : DEFAULT_PREFS.dueSoonHours,
@@ -205,11 +209,15 @@ export const useWorkbenchStore = defineStore('workbench', () => {
   const overdueTasks = computed(() => {
     const now = todayDate.value
     return activeTasks.value.filter((t) => {
-      if (t.status === 'done') return false
+      // 逾期口径排除已确认延期（FIX-6：status=delayed 或旧数据仅 delayed 打标）
+      if (t.status === 'done' || t.status === 'delayed' || t.delayed) return false
       const deadline = parseDate(t.deadline ?? t.endAt)
       return deadline < now && !isSameDay(deadline, now)
     })
   })
+
+  /** FIX-6：逾期任务 id 集（与 overdueTasks 同口径，供徽章/角标复用） */
+  const overdueTaskIds = computed(() => new Set(overdueTasks.value.map((t) => t.id)))
 
   const todayTasks = computed(() => {
     const d = parseDate(selectedDate.value)
@@ -402,12 +410,18 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     const old = task.status
     task.status = status
     task.updatedAt = new Date().toISOString()
-    // 完成写实际完成时间；重开/取消清空（归因由 closedLoop 重新确认）
-    if (status === 'done') task.completedAt = toLocalIsoNow()
-    else if (task.completedAt || task.delayed) {
-      // 状态离开 done 时保留延期标识，但清完成时间；回到 pending 视为未延迟重置
+    // FIX-6 状态清理口径：完成写实际完成时间并清延期标识（与 completeTask 一致）；
+    // 离开 done 清完成时间（归因由 closedLoop 重新确认）；
+    // 转「延期处理」同步打延期标识，转其他状态视为恢复正常、清延期标识（留痕在 history 可审计）
+    if (status === 'done') {
+      task.completedAt = toLocalIsoNow()
+      task.delayed = false
+      task.delayNote = undefined
+    } else {
       task.completedAt = undefined
-      if (status === 'pending') {
+      if (status === 'delayed') {
+        task.delayed = true
+      } else {
         task.delayed = false
         task.delayNote = undefined
       }
@@ -481,10 +495,12 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     if (note?.trim()) addProgressNote(taskId, note)
   }
 
-  /** 确认延期（C1/B1 未开始分支）：仅打标，不改动计划时间 */
+  /** 确认延期（C1/B1 未开始分支）：置「延期处理」状态并打标，不改动计划时间（FIX-6 闭环联动） */
   function markDelayed(taskId: string, note?: string) {
     const task = tasks.value.find((t) => t.id === taskId)
     if (!task || task.delayed) return
+    const old = task.status
+    task.status = 'delayed'
     task.delayed = true
     task.delayNote = note?.trim() || undefined
     task.updatedAt = new Date().toISOString()
@@ -493,11 +509,12 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       time: formatNow(),
       taskId: task.id,
       taskTitle: task.title,
-      field: '延期标识',
-      oldValue: '—',
-      newValue: note?.trim() || '未按计划开始',
-      reason: '报告闭环确认',
+      field: '状态变更',
+      oldValue: statusLabel(old),
+      newValue: statusLabel('delayed'),
+      reason: '报告闭环确认 · 延期处理',
     })
+    if (note?.trim()) addProgressNote(taskId, note)
   }
 
   /** 采集进展说明（B2 可选 / C2 必要）：只写留痕不动状态 */
@@ -538,6 +555,8 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       })
     } else {
       task.status = 'pending'
+      task.delayed = false
+      task.delayNote = undefined
       task.updatedAt = new Date().toISOString()
       history.value.unshift({
         id: `h-${Date.now()}`,
@@ -617,8 +636,17 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     }
 
     if (!changed) return
+    const oldStatus = task.status
     Object.assign(task, patch)
     task.updatedAt = new Date().toISOString()
+    // FIX-6：编辑表单变更状态时同步延期标识（与 updateTaskStatus 同口径，避免 status 与 delayed 脱节）
+    if (patch.status && patch.status !== oldStatus) {
+      if (patch.status === 'delayed') task.delayed = true
+      else {
+        task.delayed = false
+        task.delayNote = undefined
+      }
+    }
     history.value.unshift(...records)
   }
 
@@ -703,6 +731,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     conflictTaskIds,
     conflictPairs,
     conflictGroups,
+    overdueTaskIds,
     projectById,
     tagById,
     tagUsageCount,
@@ -740,6 +769,7 @@ export function statusLabel(status: TaskStatus) {
     pending: '待处理',
     in_progress: '进行中',
     to_confirm: '待确认',
+    delayed: '延期处理',
     done: '已完成',
     cancelled: '已取消',
   }

@@ -105,7 +105,7 @@ const options = computed<Option[]>(() => {
     return [
       { key: 'done', label: '已完成', desc: '补录实际完成日期（默认今天）', needDate: true },
       { key: 'progress', label: '进行中，记录进展', desc: '说明当前进展情况', needNote: true },
-      { key: 'delayed', label: '未开始，标识延期', desc: '仅打标不改动计划时间；顺延请在任务列表编辑', needNote: true, noteOptional: true },
+      { key: 'delayed', label: '未开始，延期处理', desc: '状态置为延期处理，不改动计划时间；顺延请在任务列表编辑', needNote: true, noteOptional: true },
     ]
   }
   if (kind === 'progress_probe') {

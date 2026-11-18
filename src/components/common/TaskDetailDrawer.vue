@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { formatTimeRange, priorityLabel, statusLabel, useWorkbenchStore } from '@/stores/workbench'
 import type { Task } from '@/types'
+import { overdueDays } from '@/utils/date'
 import { statusBadgeClass } from '@/utils/status'
 
 const props = defineProps<{ task: Task | null }>()
@@ -94,7 +95,7 @@ function fmtFull(iso?: string) {
               <div v-if="store.conflictTaskIds.has(task.id)" class="warn-tip">
                 时间重叠 · 任务可并行，留意安排
               </div>
-              <div v-if="task.delayed" class="warn-tip danger-tip">
+              <div v-if="task.delayed || task.status === 'delayed'" class="warn-tip danger-tip">
                 已确认延期 · {{ task.delayNote || '未按计划开始' }}
               </div>
             </section>
@@ -116,6 +117,10 @@ function fmtFull(iso?: string) {
               <div class="row">
                 <span class="k">截止</span>
                 <span class="v">{{ fmtFull(task.deadline) }}</span>
+              </div>
+              <!-- FIX-6：逾期派生提示（不写库），已完成/已取消/延期处理不显示 -->
+              <div v-if="overdueDays(task, store.today) > 0" class="warn-tip danger-tip">
+                已逾期 {{ overdueDays(task, store.today) }} 天 · 截止 {{ fmtFull(task.deadline ?? task.endAt) }}
               </div>
               <div v-if="task.completedAt" class="row">
                 <span class="k">实际完成</span>
@@ -156,6 +161,7 @@ function fmtFull(iso?: string) {
               <option value="pending">待处理</option>
               <option value="in_progress">进行中</option>
               <option value="to_confirm">待确认</option>
+              <option value="delayed">延期处理</option>
               <option value="done">已完成</option>
             </select>
             <button class="btn btn-primary" type="button" @click="emit('edit', task)">编辑任务</button>
