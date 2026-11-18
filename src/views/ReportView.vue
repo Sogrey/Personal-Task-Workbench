@@ -96,6 +96,23 @@ async function copyMarkdown() {
   }
 }
 
+/** BK-3：导出当前报表为 .md 文件（文件名含报表类型与期间） */
+const exportFilename = computed(() => {
+  if (tab.value === 'daily') return `工作日报-${dailyDate.value}.md`
+  if (tab.value === 'weekly') return `工作周报-${weekly.value.weekStart}_${weekly.value.weekEnd}.md`
+  return `工作月报-${month.value}.md`
+})
+
+function exportMarkdown() {
+  const blob = new Blob([markdown.value], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = exportFilename.value
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 function shiftDaily(n: number) {
   dailyDate.value = addDays(dailyDate.value, n)
 }
@@ -190,6 +207,7 @@ function deadlineOf(t: Task) {
           <button class="btn btn-primary" type="button" @click="copyMarkdown">
             {{ copied ? '已复制 ✓' : '复制 Markdown' }}
           </button>
+          <button class="btn" type="button" title="下载当前报表 Markdown 文件" @click="exportMarkdown">导出 .md</button>
         </div>
       </div>
     </section>
