@@ -7,7 +7,8 @@ export function statusBadgeClass(status: TaskStatus) {
     case 'pending':
       return 'badge badge-info'
     case 'to_confirm':
-      return 'badge badge-warning'
+      // BK-1：待确认徽章由琥珀改紫，与状态色板（#8b5cf6）统一，与时间冲突橙脱钩
+      return 'badge badge-purple'
     case 'delayed':
       return 'badge badge-purple'
     case 'done':
