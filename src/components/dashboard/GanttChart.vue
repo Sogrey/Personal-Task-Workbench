@@ -37,12 +37,11 @@ const rangeLabel = computed(() => {
 })
 
 /** 窗口内任务行：与窗口有交集的活动任务（跨窗口延伸裁剪显示，窗口外不渲染）；
- *  位置采用「窗口内总分钟数」连续定位（甘特语义），不对齐天格 */
+ *  FIX-8：行存起止绝对分钟（相对窗口首日 00:00），位置由分段线性映射展开工作时段 */
 interface GanttRow {
   task: Task
-  /** 相对窗口第一天 00:00 的总分钟偏移（连续，不对齐天格） */
-  offsetMin: number
-  durationMin: number
+  startMin: number
+  endMin: number
   conflict: boolean
   done: boolean
 }
@@ -69,15 +68,40 @@ const rows = computed<GanttRow[]>(() => {
       const clampedEnd = Math.min(e, +end)
       return {
         task,
-        offsetMin: (clampedStart - +start) / 60000,
-        durationMin: Math.max(20, (clampedEnd - clampedStart) / 60000),
+        startMin: (clampedStart - +start) / 60000,
+        endMin: (clampedEnd - +start) / 60000,
         conflict: store.conflictTaskIds.has(task.id),
         done: task.status === 'done',
       }
     })
 })
 
-/** 每天的小时刻度：工作开始 / 午间 / 工作结束（短标签，避免全量时刻过密） */
+/** ───── FIX-8：分段线性时间映射——工作时段展开（占列宽 75%）、非工作压缩（占 25%）───── */
+const WORK_SHARE = 0.75
+
+/** 分钟（0..1440）→ 当日列内百分比（0..100）；工作始(9:00)≈15%、工作末=15%+75%、24:00=100% */
+function dayMinuteToPct(min: number) {
+  const { start, end } = store.workHours
+  const ws = start * 60
+  const we = end * 60
+  const workMin = we - ws
+  const nonMin = 1440 - workMin
+  const nonRate = nonMin > 0 ? ((1 - WORK_SHARE) / nonMin) * 100 : 0
+  const workRate = workMin > 0 ? (WORK_SHARE / workMin) * 100 : 0
+  const firstNon = ws * nonRate // 00:00 → 工作开始的压缩段
+  if (min <= ws) return min * nonRate
+  if (min <= we) return firstNon + (min - ws) * workRate
+  return firstNon + workMin * workRate + (min - we) * nonRate
+}
+
+/** 窗口内绝对分钟（相对窗口首日 00:00，含多日）→ 窗口总宽百分比（映射单调，跨天/跨夜条连续） */
+function windowPct(min: number) {
+  const dayIdx = Math.min(WINDOW_DAYS - 1, Math.floor(min / 1440))
+  const inDay = min - dayIdx * 1440
+  return (dayIdx + dayMinuteToPct(inDay) / 100) * (100 / WINDOW_DAYS)
+}
+
+/** 每天的工作时段刻度：工作始 / 午间 / 工作末（HH:00 格式，FIX-8 按新映射拉开位置） */
 interface DayTick {
   key: string
   label: string
@@ -90,17 +114,25 @@ const dayTicks = computed<DayTick[]>(() => {
   const hours = [start, mid, end]
   const ticks: DayTick[] = []
   visibleDays.value.forEach((d, dayIdx) => {
-    const dayPct = 100 / WINDOW_DAYS
     for (const h of hours) {
       ticks.push({
         key: `${d.key}-${h}`,
-        label: `${h}`,
-        pct: (dayIdx + h / 24) * dayPct,
+        label: `${String(h).padStart(2, '0')}:00`,
+        pct: (dayIdx + dayMinuteToPct(h * 60) / 100) * (100 / WINDOW_DAYS),
       })
     }
   })
   return ticks
 })
+
+/** FIX-8：每日工作时段底带（浅色背景辅助读图，位置随新映射） */
+const workBands = computed(() =>
+  visibleDays.value.map((d, i) => {
+    const left = (i + dayMinuteToPct(store.workHours.start * 60) / 100) * (100 / WINDOW_DAYS)
+    const right = (i + dayMinuteToPct(store.workHours.end * 60) / 100) * (100 / WINDOW_DAYS)
+    return { key: d.key, left: `${left}%`, width: `${right - left}%` }
+  }),
+)
 
 /** 任务时间文本：同日仅时刻，跨天带 M/D（与周视图/时间线同口径） */
 function timeText(row: GanttRow) {
@@ -110,23 +142,22 @@ function timeText(row: GanttRow) {
 function barText(row: GanttRow) {
   return `${row.task.title} · ${timeText(row)}`
 }
-/** 跨天条样式：窗口内连续分钟 → 百分比横向定位；--bar 状态色驱动配色 */
+/** 任务条样式：FIX-8 分段线性映射定位（工作时段展开），短条给最小宽度兜底；
+ *  --bar 状态色驱动配色 */
 function barStyle(row: GanttRow) {
-  const windowMin = WINDOW_DAYS * 24 * 60
-  const left = (row.offsetMin / windowMin) * 100
-  const width = (row.durationMin / windowMin) * 100
+  const left = windowPct(row.startMin)
+  const right = windowPct(row.endMin)
+  const width = Math.max(right - left, 0.6)
   const color = row.conflict ? CONFLICT_COLOR : (STATUS_COLORS[row.task.status] ?? STATUS_COLORS.pending)
   return { left: `${left}%`, width: `${width}%`, '--bar': color }
 }
 
-/** 「现在」竖线：窗口内当前位置百分比（仅窗口含今天时显示） */
+/** 「现在」竖线：窗口内当前位置百分比（仅窗口含今天时显示，FIX-8 走新映射） */
 const nowLineLeftPct = computed(() => {
   const now = new Date()
   const dayIdx = visibleDays.value.findIndex((d) => d.key === toLocalDateKey(now))
   if (dayIdx < 0) return null
-  const dayPct = 100 / WINDOW_DAYS
-  const dayOffsetPct = ((now.getHours() * 60 + now.getMinutes()) / 1440) * dayPct
-  return dayIdx * dayPct + dayOffsetPct
+  return (dayIdx + dayMinuteToPct(now.getHours() * 60 + now.getMinutes()) / 100) * (100 / WINDOW_DAYS)
 })
 
 const scrollBody = ref<HTMLElement | null>(null)
@@ -253,6 +284,9 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
             :class="{ weekend: d.isWeekend, today: d.isToday }"
             :style="{ left: `${(100 / WINDOW_DAYS) * d.idx}%`, width: `${100 / WINDOW_DAYS}%` }"
           />
+
+          <!-- FIX-8：每日工作时段底带（工作区间浅色，宽度=列宽 75%） -->
+          <div v-for="b in workBands" :key="`wb-${b.key}`" class="work-band" :style="{ left: b.left, width: b.width }" />
 
           <!-- 交叉天分隔竖线 -->
           <div v-for="i in WINDOW_DAYS - 1" :key="`v-${i}`" class="day-sep" :style="{ left: `${(100 / WINDOW_DAYS) * i}%` }" />
@@ -442,13 +476,13 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
 /* 小时刻度仅落在每天的工作时段区，其他时间留给任务条本身 */
 
 .task-cell {
-  height: 88px;
-  padding: 10px 12px;
+  height: 48px;
+  padding: 5px 10px;
   border-bottom: 1px dashed #eef2f7;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 4px;
+  gap: 2px;
 }
 
 .task-cell.done {
@@ -488,7 +522,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
 
 .bar-row {
   position: relative;
-  height: 88px;
+  height: 48px;
   border-bottom: 1px dashed #eef2f7;
 }
 
@@ -496,6 +530,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
   border-bottom: none;
 }
 
+/* FIX-8：非工作时间整体弱化（工作带外更浅），突出工作时段 */
 .day-col-bg {
   position: absolute;
   top: 0;
@@ -514,6 +549,19 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
   border-right: 1px dashed rgba(67, 160, 71, 0.35);
 }
 
+/* FIX-8：工作时段底带（占列宽 75%），左右细边界便于对齐刻度 */
+.work-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(100, 116, 139, 0.07);
+  box-shadow:
+    inset 1px 0 0 rgba(100, 116, 139, 0.22),
+    inset -1px 0 0 rgba(100, 116, 139, 0.22);
+  z-index: 0;
+  pointer-events: none;
+}
+
 .day-sep {
   position: absolute;
   top: 0;
@@ -523,26 +571,27 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
   pointer-events: none;
 }
 
-/* 任务条：行内水平定位（左=开始，宽=时长）；按状态着色（待处理蓝/进行中绿/待确认紫/已完成灰） */
+/* 任务条：行内水平定位（左=开始，宽=时长）；FIX-8 紧凑化 30px 高、11px 字号；
+ *  按状态着色（待处理蓝/进行中绿/待确认紫/已完成灰） */
 .bar {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  height: 56px;
-  border-radius: 8px;
+  height: 30px;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--bar, #3b82f6) 14%, white);
   border: 1px solid color-mix(in srgb, var(--bar, #3b82f6) 50%, white);
   border-left: 3px solid var(--bar, #3b82f6);
   color: #1f2937;
   display: flex;
   align-items: center;
-  padding: 0 10px;
+  padding: 0 8px;
   z-index: 2;
   cursor: pointer;
   overflow: hidden;
   white-space: nowrap;
-  font-size: 12px;
-  min-width: 36px;
+  font-size: 11px;
+  min-width: 24px;
 }
 
 .bar.conflict {
