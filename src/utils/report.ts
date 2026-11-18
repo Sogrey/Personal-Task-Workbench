@@ -120,10 +120,11 @@ function todayOf(input: ReportInput) {
   return input.tasks[0]?.startAt.slice(0, 10) ?? '9999-12-31'
 }
 
-/** 截止时间早于 before 且未完成的任务（逾期口径；before 应传 min(周期末, 今天)） */
+/** 截止时间早于 before 且未完成的任务（逾期口径；before 应传 min(周期末, 今天)）。
+ *  FIX-6：已确认延期（status=delayed 或旧数据打标）不计入逾期，归入「已确认延期」分组，避免双重计数 */
 function overdueBefore(tasks: Task[], before: string) {
   return activeOf(tasks).filter((t) => {
-    if (t.status === 'done') return false
+    if (t.status === 'done' || t.status === 'delayed' || t.delayed) return false
     const deadline = dayKey(t.deadline ?? t.endAt)
     return deadline < before
   })
@@ -223,7 +224,8 @@ export function closedLoopChecks(input: ReportInput, now = new Date()): ClosedLo
   const items: ClosedLoopItem[] = []
   const nowMs = now.getTime()
   for (const task of input.tasks) {
-    if (task.status === 'cancelled' || task.status === 'done') continue
+    // FIX-6：延期处理已确认闭环，不再追问
+    if (task.status === 'cancelled' || task.status === 'done' || task.status === 'delayed') continue
     const startMs = +new Date(task.startAt)
     const endMs = +new Date(task.endAt)
     const window = `${task.startAt.slice(5, 16).replace('T', ' ')} – ${task.endAt.slice(5, 16).replace('T', ' ')}`
@@ -329,7 +331,9 @@ export function buildWeeklyReport(input: ReportInput, weekStart: string): Weekly
     projectStats: projectStats(input).filter((p) => p.total > 0),
     timeByProject,
     riskOverdue: overdueBefore(input.tasks, overdueDeadline(weekEnd, todayOf(input))),
-    riskDelayed: activeOf(input.tasks).filter((t) => t.delayed && t.status !== 'done'),
+    riskDelayed: activeOf(input.tasks).filter(
+      (t) => (t.delayed || t.status === 'delayed') && t.status !== 'done',
+    ),
     riskHighPriority: activeOf(input.tasks).filter(
       (t) =>
         t.status !== 'done' &&
@@ -412,26 +416,21 @@ export function overdueDaysText(task: Task, today: string) {
   return diff > 0 ? `（逾期 ${diff} 天）` : ''
 }
 
+/** FIX-1：条目仅保留项目，不再携带时间段与负责人（负责人在标题署名一次） */
 function taskLine(t: Task, projectName: (id?: string) => string) {
   const proj = t.projectId ? projectName(t.projectId) : ''
-  const hhmm = (v: string) => {
-    const d = new Date(v)
-    const pad = (n: number) => String(n).padStart(2, '0')
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}`
-  }
-  const time = `${hhmm(t.startAt)}–${hhmm(t.endAt)}`
-  const meta = [proj, time, t.owner].filter(Boolean).join(' · ')
-  return `- ${t.title}${meta ? `（${meta}）` : ''}`
+  return `- ${t.title}${proj ? `（${proj}）` : ''}`
 }
 
 export function dailyToMarkdown(
   r: DailyReport,
+  ownerName: string,
   projectName: (id?: string) => string,
   tagName: (id: string) => string | undefined,
   history: HistoryRecord[] = [],
 ) {
   const L: string[] = []
-  L.push(`# 工作日报 · ${r.date}（${r.weekday}）`, '')
+  L.push(`# 工作日报 · ${r.date}（${r.weekday}）· ${ownerName}`, '')
   L.push(`## 今日完成（${r.completed.length} 项）`)
   if (r.completed.length) r.completed.forEach((t) => L.push(taskLine(t, projectName)))
   else L.push('- 无')
@@ -481,12 +480,13 @@ export function dailyToMarkdown(
 
 export function weeklyToMarkdown(
   r: WeeklyReport,
+  ownerName: string,
   projectName: (id?: string) => string,
   today: string,
   history: HistoryRecord[] = [],
 ) {
   const L: string[] = []
-  L.push(`# 工作周报 · ${r.label}`, '')
+  L.push(`# 工作周报 · ${r.label} · ${ownerName}`, '')
   L.push('## 本周概览')
   L.push(`- 完成任务：${r.completed.length} 项`)
   L.push(`- 进行中：${r.inProgress.length} 项`)
@@ -556,9 +556,9 @@ export function weeklyToMarkdown(
   return L.join('\n')
 }
 
-export function monthlyToMarkdown(r: MonthlyReport, projectName: (id?: string) => string) {
+export function monthlyToMarkdown(r: MonthlyReport, ownerName: string, projectName: (id?: string) => string) {
   const L: string[] = []
-  L.push(`# 工作月报 · ${r.label}（${r.monthlyRange}）`, '')
+  L.push(`# 工作月报 · ${r.label}（${r.monthlyRange}）· ${ownerName}`, '')
   L.push('## 月度概览')
   L.push(`- 完成任务：${r.completedCount} 项（提前 ${r.timeliness.early} · 按时 ${r.timeliness.ontime} · 超时 ${r.timeliness.late}）`)
   L.push(`- 新建任务：${r.createdCount} 项`)

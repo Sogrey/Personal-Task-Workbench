@@ -8,11 +8,13 @@ const draft = reactive<WorkbenchPrefs>({ ...store.prefs })
 const savedAt = ref('')
 
 /** 是否有未保存修改 */
-const dirty = computed(() =>
-  draft.displayName !== store.prefs.displayName ||
-  draft.workStart !== store.prefs.workStart ||
-  draft.workEnd !== store.prefs.workEnd ||
-  draft.dueSoonHours !== store.prefs.dueSoonHours,
+const dirty = computed(
+  () =>
+    draft.displayName !== store.prefs.displayName ||
+    draft.ownerName !== store.prefs.ownerName ||
+    draft.workStart !== store.prefs.workStart ||
+    draft.workEnd !== store.prefs.workEnd ||
+    draft.dueSoonHours !== store.prefs.dueSoonHours,
 )
 
 const invalidTime = computed(() => draft.workEnd <= draft.workStart)
@@ -38,6 +40,7 @@ function save() {
 
 function resetDefaults() {
   draft.displayName = '我'
+  draft.ownerName = '苏朝恒'
   draft.workStart = '08:00'
   draft.workEnd = '18:00'
   draft.dueSoonHours = 24
@@ -60,6 +63,10 @@ function resetDefaults() {
         <div class="field">
           <label>显示名称（顶栏展示）</label>
           <input v-model="draft.displayName" placeholder="你的名字" />
+        </div>
+        <div class="field">
+          <label>任务默认负责人（新建任务预填、报告署名）</label>
+          <input v-model="draft.ownerName" placeholder="新建任务时默认填入的负责人" />
         </div>
         <div class="field">
           <label>工作台基准日（自动取系统日期）</label>

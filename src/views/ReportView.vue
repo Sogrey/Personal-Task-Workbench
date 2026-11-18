@@ -52,9 +52,10 @@ const totalPlannedHours = computed(() =>
 const maxTrend = computed(() => Math.max(1, ...monthly.value.weeklyTrend.map((w) => w.completed)))
 
 const markdown = computed(() => {
-  if (tab.value === 'daily') return dailyToMarkdown(daily.value, projectName, tagName, store.history)
-  if (tab.value === 'weekly') return weeklyToMarkdown(weekly.value, projectName, todayStr.value, store.history)
-  return monthlyToMarkdown(monthly.value, projectName)
+  const owner = store.prefs.ownerName
+  if (tab.value === 'daily') return dailyToMarkdown(daily.value, owner, projectName, tagName, store.history)
+  if (tab.value === 'weekly') return weeklyToMarkdown(weekly.value, owner, projectName, todayStr.value, store.history)
+  return monthlyToMarkdown(monthly.value, owner, projectName)
 })
 
 /** ───── 闭环检查（报告生成前的状态一致性）───── */
@@ -235,7 +236,7 @@ function deadlineOf(t: Task) {
         <ul v-if="daily.completed.length" class="task-list">
           <li v-for="t in daily.completed" :key="t.id">
             <RouterLink class="text-link" :to="{ path: '/tasks', query: { task: t.id } }">{{ t.title }}</RouterLink>
-            <span class="meta">{{ projectName(t.projectId) }} · {{ t.owner }}</span>
+            <span class="meta">{{ projectName(t.projectId) }}</span>
             <span :class="statusBadgeClass(t.status)">{{ t.status === 'done' ? '已完成' : '完成后又变更' }}</span>
           </li>
         </ul>
