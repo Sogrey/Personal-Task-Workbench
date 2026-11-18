@@ -9,65 +9,75 @@ import { formatRangeSmart, toLocalDateKey } from '@/utils/date'
 const store = useWorkbenchStore()
 const router = useRouter()
 
-/** 展示范围：选中周（与周视图同鈰），按周切换 */
-const weekLabel = computed(() => {
-  const days = store.weekDays
-  const a = days[0]
-  const b = days[6]
-  if (!a || !b) return ''
-  return `${a.getFullYear()}年${a.getMonth() + 1}月${a.getDate()}日 – ${b.getMonth() + 1}月${b.getDate()}日`
-})
+/** FIX-7：3 天显示窗口——今天居中；今天为周一（本周首日）时今天是窗口第一天，
+ *  今天为周日（本周末日）时今天是窗口第三天；浏览其它周时取该周中间 3 天 */
+const WINDOW_DAYS = 3
 
-const dayCells = computed(() =>
-  store.weekDays.map((d, i) => ({
+const visibleDays = computed(() => {
+  const days = store.weekDays
+  const todayIdx = days.findIndex((d) => toLocalDateKey(d) === store.today)
+  const startIdx = todayIdx < 0 ? 2 : Math.max(0, Math.min(4, todayIdx - 1))
+  return days.slice(startIdx, startIdx + WINDOW_DAYS).map((d, i) => ({
     date: d,
     key: toLocalDateKey(d),
     label: ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()],
     isWeekend: d.getDay() === 0 || d.getDay() === 6,
     isToday: toLocalDateKey(d) === store.today,
     idx: i,
-  })),
-)
+  }))
+})
 
-/** 本周任务行：按开始时间排序；跨天任务裁剪到本周边界内绘制。
- *  位置采用「周内总分钟数」连续定位（甘特语义），不把条形对齐到整天格子。 */
+/** 展示范围：与周视图同源切换周；FIX-7：仅显示窗口 3 天日期范围 */
+const rangeLabel = computed(() => {
+  const days = visibleDays.value
+  const a = days[0]?.date
+  const b = days[2]?.date
+  if (!a || !b) return ''
+  return `${a.getMonth() + 1}/${a.getDate()} – ${b.getMonth() + 1}/${b.getDate()}`
+})
+
+/** 窗口内任务行：与窗口有交集的活动任务（跨窗口延伸裁剪显示，窗口外不渲染）；
+ *  位置采用「窗口内总分钟数」连续定位（甘特语义），不对齐天格 */
 interface GanttRow {
   task: Task
-  /** 相对周一 00:00 的总分钟偏移（连续，不对齐天格） */
+  /** 相对窗口第一天 00:00 的总分钟偏移（连续，不对齐天格） */
   offsetMin: number
   durationMin: number
   conflict: boolean
   done: boolean
 }
 
-const weekStart = computed(() => {
-  const d = store.weekDays[0] ?? new Date()
+const windowStart = computed(() => {
+  const d = visibleDays.value[0]?.date ?? new Date()
   const c = new Date(d)
   c.setHours(0, 0, 0, 0)
   return c
 })
 
 const rows = computed<GanttRow[]>(() => {
-  const list = [...store.weekTasks].sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
-  const start = weekStart.value
+  const start = windowStart.value
   const end = new Date(start)
-  end.setDate(start.getDate() + 7)
-  return list.map((task) => {
-    const s = +new Date(task.startAt)
-    const e = +new Date(task.endAt)
-    const clampedStart = Math.max(s, +start)
-    const clampedEnd = Math.min(e, +end)
-    return {
-      task,
-      offsetMin: (clampedStart - +start) / 60000,
-      durationMin: Math.max(20, (clampedEnd - clampedStart) / 60000),
-      conflict: store.conflictTaskIds.has(task.id),
-      done: task.status === 'done',
-    }
-  })
+  end.setDate(start.getDate() + WINDOW_DAYS)
+  return store.tasks
+    .filter((t) => t.status !== 'cancelled')
+    .filter((t) => +new Date(t.startAt) < +end && +new Date(t.endAt) > +start)
+    .sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
+    .map((task) => {
+      const s = +new Date(task.startAt)
+      const e = +new Date(task.endAt)
+      const clampedStart = Math.max(s, +start)
+      const clampedEnd = Math.min(e, +end)
+      return {
+        task,
+        offsetMin: (clampedStart - +start) / 60000,
+        durationMin: Math.max(20, (clampedEnd - clampedStart) / 60000),
+        conflict: store.conflictTaskIds.has(task.id),
+        done: task.status === 'done',
+      }
+    })
 })
 
-/** 每天的小时刻度：工作开始 / 午间 / 工作结束（短标签，避免 7 天全量时刻过密） */
+/** 每天的小时刻度：工作开始 / 午间 / 工作结束（短标签，避免全量时刻过密） */
 interface DayTick {
   key: string
   label: string
@@ -79,8 +89,8 @@ const dayTicks = computed<DayTick[]>(() => {
   const mid = Math.round((start + end) / 2)
   const hours = [start, mid, end]
   const ticks: DayTick[] = []
-  dayCells.value.forEach((d, dayIdx) => {
-    const dayPct = 100 / 7
+  visibleDays.value.forEach((d, dayIdx) => {
+    const dayPct = 100 / WINDOW_DAYS
     for (const h of hours) {
       ticks.push({
         key: `${d.key}-${h}`,
@@ -92,31 +102,29 @@ const dayTicks = computed<DayTick[]>(() => {
   return ticks
 })
 
-/** 任务条内文案：跨天补日期，条够宽才显示 */
-function barText(row: GanttRow) {
-  const s = new Date(row.task.startAt)
-  const e = new Date(row.task.endAt)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const day = (d: Date) => `${d.getMonth() + 1}/${d.getDate()}`
-  const sTxt = `${day(s)} ${pad(s.getHours())}:${pad(s.getMinutes())}`
-  const eTxt = `${day(e)} ${pad(e.getHours())}:${pad(e.getMinutes())}`
-  return `${sTxt} – ${eTxt}`
+/** 任务时间文本：同日仅时刻，跨天带 M/D（与周视图/时间线同口径） */
+function timeText(row: GanttRow) {
+  return formatRangeSmart(row.task.startAt, row.task.endAt)
 }
-/** 跨天条样式：周内连续分钟 → 百分比横向定位；--bar 状态色驱动配色 */
+/** FIX-7：条内文案 = 任务名 · 时间段（任务名在前，条窄时尾部时间截断，悬浮卡有全量） */
+function barText(row: GanttRow) {
+  return `${row.task.title} · ${timeText(row)}`
+}
+/** 跨天条样式：窗口内连续分钟 → 百分比横向定位；--bar 状态色驱动配色 */
 function barStyle(row: GanttRow) {
-  const weekMin = 7 * 24 * 60
-  const left = (row.offsetMin / weekMin) * 100
-  const width = (row.durationMin / weekMin) * 100
+  const windowMin = WINDOW_DAYS * 24 * 60
+  const left = (row.offsetMin / windowMin) * 100
+  const width = (row.durationMin / windowMin) * 100
   const color = row.conflict ? CONFLICT_COLOR : (STATUS_COLORS[row.task.status] ?? STATUS_COLORS.pending)
   return { left: `${left}%`, width: `${width}%`, '--bar': color }
 }
 
-/** 「现在」竖线：周内当前位置百分比（仅本周内显示） */
+/** 「现在」竖线：窗口内当前位置百分比（仅窗口含今天时显示） */
 const nowLineLeftPct = computed(() => {
   const now = new Date()
-  const dayIdx = dayCells.value.findIndex((d) => d.key === toLocalDateKey(now))
+  const dayIdx = visibleDays.value.findIndex((d) => d.key === toLocalDateKey(now))
   if (dayIdx < 0) return null
-  const dayPct = 100 / 7
+  const dayPct = 100 / WINDOW_DAYS
   const dayOffsetPct = ((now.getHours() * 60 + now.getMinutes()) / 1440) * dayPct
   return dayIdx * dayPct + dayOffsetPct
 })
@@ -135,9 +143,9 @@ function scrollNowIntoView() {
 }
 
 onMounted(() => {
-  // 首屏滚到今天附近
+  // 首屏滚到今天附近（窗口不含今天时定位中间列）
   const el = scrollBody.value
-  const nowLeft = nowLineLeftPct.value ?? (5 / 7) * 100
+  const nowLeft = nowLineLeftPct.value ?? 50
   if (el) {
     requestAnimationFrame(() => {
       const grid = el.querySelector('.grid-col') as HTMLElement | null
@@ -185,9 +193,9 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
 <template>
   <section class="card gantt">
     <div class="card-title">
-      <span>本周任务甘特图</span>
+      <span>任务甘特图</span>
       <div class="tools">
-        <span class="muted">{{ weekLabel }}</span>
+        <span class="muted">{{ rangeLabel }} · 3 天窗口</span>
         <button class="btn btn-ghost" type="button" @click="store.shiftWeek(-1)">‹</button>
         <button class="btn" type="button" @click="store.goTodayWeek()">今天</button>
         <button class="btn btn-ghost" type="button" @click="store.shiftWeek(1)">›</button>
@@ -200,7 +208,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
       <div class="gantt-head">
         <div class="corner">任务 / 时间</div>
         <div
-          v-for="d in dayCells"
+          v-for="d in visibleDays"
           :key="d.key"
           class="day-head"
           :class="{ weekend: d.isWeekend, today: d.isToday }"
@@ -231,7 +239,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
             :class="{ done: row.done, conflict: row.conflict }"
           >
             <span class="t-title" :title="`查看「${row.task.title}」详情`" @click="openTask(row.task)">{{ row.task.title }}</span>
-            <span class="t-sub">{{ barText(row) }}</span>
+            <span class="t-sub">{{ timeText(row) }}</span>
           </div>
         </div>
 
@@ -239,17 +247,17 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
         <div class="grid-col">
           <!-- 今天列高亮（星期对应列） -->
           <div
-            v-for="d in dayCells"
+            v-for="d in visibleDays"
             :key="d.key"
             class="day-col-bg"
             :class="{ weekend: d.isWeekend, today: d.isToday }"
-            :style="{ left: `${(100 / 7) * d.idx}%`, width: `${100 / 7}%` }"
+            :style="{ left: `${(100 / WINDOW_DAYS) * d.idx}%`, width: `${100 / WINDOW_DAYS}%` }"
           />
 
           <!-- 交叉天分隔竖线 -->
-          <div v-for="i in 6" :key="`v-${i}`" class="day-sep" :style="{ left: `${(100 / 7) * i}%` }" />
+          <div v-for="i in WINDOW_DAYS - 1" :key="`v-${i}`" class="day-sep" :style="{ left: `${(100 / WINDOW_DAYS) * i}%` }" />
 
-          <!-- 任务条：每行一任务，条内按周内连续时间水平定位 -->
+          <!-- 任务条：每行一任务，条内按窗口内连续时间水平定位 -->
           <div v-for="row in rows" :key="row.task.id" class="bar-row">
             <div
               class="bar"
@@ -272,7 +280,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
       </div>
     </div>
 
-    <div v-else class="empty-hint">本周暂无任务安排</div>
+    <div v-else class="empty-hint">当前窗口暂无任务安排</div>
 
     <div
       v-if="hoverCard"
@@ -327,10 +335,10 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
   max-height: 640px;
 }
 
-/* 顶部日期行：左角 + 7 天 */
+/* 顶部日期行：左角 + 3 天窗口（列宽充裕，短任务条内容不再截断） */
 .gantt-head {
   display: grid;
-  grid-template-columns: 180px repeat(7, minmax(120px, 1fr));
+  grid-template-columns: 180px repeat(3, minmax(160px, 1fr));
   position: sticky;
   top: 0;
   z-index: 5;
@@ -341,7 +349,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
 /* 小时刻度行：与日期列同构 */
 .hour-head {
   display: grid;
-  grid-template-columns: 180px minmax(840px, 1fr);
+  grid-template-columns: 180px minmax(480px, 1fr);
   position: sticky;
   top: 48px;
   z-index: 5;
@@ -362,7 +370,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
 .hour-scale {
   position: relative;
   height: 22px;
-  /* 刻度位置基于整个周区域百分比，与任务条同一坐标系 */
+  /* 刻度位置基于整个窗口区域百分比，与任务条同一坐标系 */
 }
 
 .hour-scale span {
@@ -419,7 +427,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
 
 .gantt-body {
   display: grid;
-  grid-template-columns: 180px minmax(840px, 1fr); /* 7 天 × 120px 最小宽度，保证小时刻度可读 */
+  grid-template-columns: 180px minmax(480px, 1fr); /* 3 天 × 160px 最小宽度 */
   position: relative;
 }
 
@@ -473,7 +481,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
   font-weight: 400;
 }
 
-/* 右侧时间区：每任务一行泳道，条形水平按周内时间定位 */
+/* 右侧时间区：每任务一行泳道，条形水平按窗口内时间定位 */
 .grid-col {
   position: relative;
 }
