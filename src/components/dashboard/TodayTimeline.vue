@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { formatTimeRange, statusLabel, useWorkbenchStore } from '@/stores/workbench'
+import { formatRangeSmart } from '@/utils/date'
+import { statusLabel, useWorkbenchStore } from '@/stores/workbench'
 import { statusBadgeClass } from '@/utils/status'
 
 const store = useWorkbenchStore()
@@ -20,7 +21,7 @@ const title = computed(() => {
 
     <div v-if="store.todayTasks.length" class="list">
       <article v-for="task in store.todayTasks" :key="task.id" class="item">
-        <div class="time">{{ formatTimeRange(task.startAt, task.endAt) }}</div>
+        <div class="time">{{ formatRangeSmart(task.startAt, task.endAt) }}</div>
         <div class="body">
           <div class="row">
             <RouterLink
@@ -71,7 +72,7 @@ const title = computed(() => {
 
 .item {
   display: grid;
-  grid-template-columns: 92px 1fr;
+  grid-template-columns: 148px 1fr;
   gap: 10px;
   padding: 10px;
   border-radius: 10px;
@@ -82,6 +83,8 @@ const title = computed(() => {
   font-size: 12px;
   color: var(--text-secondary);
   padding-top: 2px;
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 .row {

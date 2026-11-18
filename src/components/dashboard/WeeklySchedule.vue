@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { formatTimeRange, statusLabel, useWorkbenchStore } from '@/stores/workbench'
+import { statusLabel, useWorkbenchStore } from '@/stores/workbench'
 import type { Task } from '@/types'
 import { CONFLICT_COLOR, STATUS_COLORS, statusBadgeClass } from '@/utils/status'
-import { toLocalDateKey } from '@/utils/date'
+import { formatRangeSmart, overdueDays, toLocalDateKey } from '@/utils/date'
 
 const store = useWorkbenchStore()
 
@@ -32,7 +32,8 @@ function blockColors(task: Task, conflict: boolean) {
 }
 
 /** 布局后的色块：同一天时间重叠的任务阶梯层叠（左错右齐），上层块置顶可读；
- *  cluster 为该块所属重叠簇的全部任务（点击色块时展开该簇完整列表，解决下层块收不到鼠标事件的问题） */
+ *  cluster 为该块所属重叠簇的全部任务（点击色块时展开该簇完整列表，解决下层块收不到鼠标事件的问题）
+ *  FIX-4：跨天任务按覆盖日期逐日渲染，跨天块带 crossDay 标记与当日时段 */
 interface LaidBlock {
   task: Task
   top: string
@@ -46,6 +47,10 @@ interface LaidBlock {
   background: string
   cluster: Task[]
   badge: boolean
+  /** FIX-4：跨天延续块 */
+  crossDay: boolean
+  /** 当日时段（clamp 到时间轴内），跨天块尾附标记 */
+  dayRangeText: string
 }
 
 function dayKey(d: Date) {
@@ -60,17 +65,42 @@ function isToday(d: Date) {
  *  上层块几乎全宽可读，下层块时间不同处自然露出，hover 置顶 */
 const STACK_STEP_PX = 12
 
-function layoutDay(tasks: Task[]): LaidBlock[] {
+function layoutDay(tasks: Task[], day: Date): LaidBlock[] {
+  const dayStr = dayKey(day)
   const sorted = [...tasks].sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
   const result: LaidBlock[] = []
   let cluster: Task[] = []
   let clusterEnd = 0
 
-  function pushBlock(task: Task, colIndex: number, clusterTasks: Task[], showBadge: boolean) {
+  /** 任务在当日时间轴内的起止分钟（FIX-4：跨天任务 clamp 到当天轴内） */
+  function effectiveRange(task: Task) {
     const start = new Date(task.startAt)
     const end = new Date(task.endAt)
-    const startMin = (start.getHours() - HOUR_START) * 60 + start.getMinutes()
-    const endMin = (end.getHours() - HOUR_START) * 60 + end.getMinutes()
+    const dayStart = new Date(day)
+    dayStart.setHours(HOUR_START, 0, 0, 0)
+    const dayEnd = new Date(day)
+    dayEnd.setHours(HOUR_END, 0, 0, 0)
+    const effStart = start < dayStart ? dayStart : start
+    const effEnd = end > dayEnd ? dayEnd : end
+    const total = (HOUR_END - HOUR_START) * 60
+    const startMin = Math.max(0, Math.min(total, (effStart.getHours() - HOUR_START) * 60 + effStart.getMinutes()))
+    const endMin = Math.max(0, Math.min(total, (effEnd.getHours() - HOUR_START) * 60 + effEnd.getMinutes()))
+    const crossDay = dayKey(start) !== dayKey(end)
+    // 跨天任务在当日轴内的区间：起点日 → 当日全天延续；中间日 → 全天；尾日 → 截止当日某时
+    const hm = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    let dayRangeText = `${hm(effStart)}–${hm(effEnd)}`
+    if (crossDay) {
+      const isStartDay = dayKey(start) === dayStr
+      const isEndDay = dayKey(end) === dayStr
+      if (isStartDay && !isEndDay) dayRangeText = `${hm(effStart)}–${hm(dayEnd)} ⇢`
+      else if (!isStartDay && isEndDay) dayRangeText = `⇠ ${hm(dayStart)}–${hm(effEnd)}`
+      else dayRangeText = `⇠ 全天 ⇢`
+    }
+    return { startMin, endMin, crossDay, dayRangeText }
+  }
+
+  function pushBlock(task: Task, colIndex: number, clusterTasks: Task[], showBadge: boolean) {
+    const { startMin, endMin, crossDay, dayRangeText } = effectiveRange(task)
     const total = (HOUR_END - HOUR_START) * 60
     const top = Math.max(0, (startMin / total) * 100)
     const height = Math.max(6, ((endMin - startMin) / total) * 100)
@@ -91,6 +121,8 @@ function layoutDay(tasks: Task[]): LaidBlock[] {
       background,
       cluster: clusterTasks,
       badge: showBadge,
+      crossDay,
+      dayRangeText,
     })
   }
 
@@ -140,13 +172,15 @@ function layoutDay(tasks: Task[]): LaidBlock[] {
   flush()
   return result
 }
-
 const laidByDay = computed(() => {
   const map = new Map<string, LaidBlock[]>()
   for (const day of store.weekDays) {
     const key = dayKey(day)
-    const dayTasks = store.weekTasks.filter((t) => t.startAt.slice(0, 10) === key)
-    map.set(key, layoutDay(dayTasks))
+    // FIX-4：按「覆盖日期」归列——开始日 ≤ 当日 ≤ 结束日，跨天任务逐日延续显示
+    const dayTasks = store.weekTasks.filter(
+      (t) => t.startAt.slice(0, 10) <= key && t.endAt.slice(0, 10) >= key,
+    )
+    map.set(key, layoutDay(dayTasks, day))
   }
   return map
 })
@@ -296,8 +330,15 @@ onBeforeUnmount(() => {
             @click="onBlockClick($event, block)"
           >
             <span v-if="block.badge" class="stack-badge" title="点击查看全部重叠任务">+{{ block.cluster.length - 1 }}</span>
-            <div class="block-title">{{ block.task.title }}</div>
-            <div class="block-meta">{{ formatTimeRange(block.task.startAt, block.task.endAt) }} · {{ block.task.owner }}</div>
+            <div class="block-title">
+              {{ block.task.title
+              }}<span v-if="block.crossDay" class="cross-tag">跨天</span><span
+                v-if="overdueDays(block.task, store.today) > 0"
+                class="overdue-tag"
+                >逾期{{ overdueDays(block.task, store.today) }}天</span
+              >
+            </div>
+            <div class="block-meta">{{ block.dayRangeText }}</div>
           </div>
         </div>
       </div>
@@ -316,7 +357,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="hc-row">
         <span>时间</span>
-        <span>{{ formatTimeRange(hoverCard.block.task.startAt, hoverCard.block.task.endAt) }}</span>
+        <span>{{ formatRangeSmart(hoverCard.block.task.startAt, hoverCard.block.task.endAt) }}</span>
       </div>
       <div class="hc-row">
         <span>负责人</span>
@@ -355,7 +396,7 @@ onBeforeUnmount(() => {
             <span :class="statusBadgeClass(task.status)">{{ statusLabel(task.status) }}</span>
           </div>
           <div class="cp-meta">
-            {{ formatTimeRange(task.startAt, task.endAt) }} · {{ task.owner }}
+            {{ formatRangeSmart(task.startAt, task.endAt) }} · {{ task.owner }}
             <template v-if="task.contact"> · 对接：{{ task.contact }}</template>
             · {{ store.projectById(task.projectId)?.name ?? '未关联' }}
           </div>
@@ -527,6 +568,32 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* FIX-6：逾期标记（派生显示，已完成/已取消/延期处理不出现） */
+.overdue-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  background: rgba(220, 38, 38, 0.14);
+  color: #b91c1c;
+  vertical-align: 1px;
+}
+
+/* FIX-4：跨天延续标记 */
+.cross-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  background: rgba(139, 92, 246, 0.18);
+  color: #6d28d9;
+  vertical-align: 1px;
 }
 
 .hover-card {

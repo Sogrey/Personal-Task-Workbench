@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { formatTimeRange, statusLabel, useWorkbenchStore } from '@/stores/workbench'
+import { statusLabel, useWorkbenchStore } from '@/stores/workbench'
 import type { Task } from '@/types'
 import { CONFLICT_COLOR, STATUS_COLORS, statusBadgeClass } from '@/utils/status'
-import { toLocalDateKey } from '@/utils/date'
+import { formatRangeSmart, toLocalDateKey } from '@/utils/date'
 
 const store = useWorkbenchStore()
 const router = useRouter()
@@ -287,7 +287,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
       </div>
       <div class="hc-row">
         <span>时间</span>
-        <span>{{ formatTimeRange(hoverCard.task.startAt, hoverCard.task.endAt) }}</span>
+        <span>{{ formatRangeSmart(hoverCard.task.startAt, hoverCard.task.endAt) }}</span>
       </div>
       <div class="hc-row">
         <span>负责人</span>
