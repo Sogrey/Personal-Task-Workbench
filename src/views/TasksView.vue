@@ -9,6 +9,7 @@ import {
   useWorkbenchStore,
 } from '@/stores/workbench'
 import type { Task, TaskPriority, TaskStatus } from '@/types'
+import { overdueDays } from '@/utils/date'
 import { statusBadgeClass } from '@/utils/status'
 import TaskDetailDrawer from '@/components/common/TaskDetailDrawer.vue'
 
@@ -38,7 +39,7 @@ watch(
 const form = reactive({
   title: '',
   projectId: store.projects[0]?.id ?? '',
-  owner: '苏朝恒',
+  owner: store.prefs.ownerName,
   contact: '',
   description: '',
   startAt: `${store.today}T09:00`,
@@ -161,7 +162,7 @@ function resetForm() {
   editingId.value = null
   form.title = ''
   form.projectId = ''
-  form.owner = '苏朝恒'
+  form.owner = store.prefs.ownerName
   form.contact = ''
   form.description = ''
   form.startAt = `${store.today}T09:00`
@@ -188,8 +189,23 @@ function cancelEdit() {
   resetForm()
 }
 
+/* ───── FIX-3：时间字段语义与先后校验 ───── */
+/** 结束早于开始 → 硬校验，禁止保存 */
+const endBeforeStart = computed(() => !!form.endAt && !!form.startAt && form.endAt < form.startAt)
+/** 截止早于开始 → 软警示，允许保存（兼容历史数据） */
+const deadlineBeforeStart = computed(
+  () => !!form.deadline && !!form.startAt && form.deadline < form.startAt,
+)
+
+/** 列表行内常驻警示：已保存任务的截止早于开始 */
+function taskDeadlineBeforeStart(task: Task) {
+  return !!(task.deadline && task.deadline < task.startAt)
+}
+
 function submit() {
   if (!form.title.trim()) return
+  // FIX-3 硬校验：结束不早于开始，否则拦截保存
+  if (endBeforeStart.value) return
   const payload = {
     title: form.title.trim(),
     projectId: form.projectId || undefined,
@@ -223,6 +239,7 @@ function submit() {
           <option value="pending">待处理</option>
           <option value="in_progress">进行中</option>
           <option value="to_confirm">待确认</option>
+          <option value="delayed">延期处理</option>
           <option value="done">已完成</option>
         </select>
         <select v-model="priorityFilter">
@@ -309,6 +326,7 @@ function submit() {
             <option value="pending">待处理</option>
             <option value="in_progress">进行中</option>
             <option value="to_confirm">待确认</option>
+            <option value="delayed">延期处理</option>
           </select>
         </div>
         <div class="field span-all">
@@ -318,6 +336,11 @@ function submit() {
             rows="2"
             placeholder="补充说明、注意事项、沟通记录等"
           />
+        </div>
+        <div class="field span-all time-explain">
+          <p class="muted">「开始/结束」= 计划执行时段（占哪天的哪几个小时，驱动日历色块与时间投入）；「截止」= 完成期限（最晚交付时间，驱动逾期与临期提醒），可与执行时段无关。</p>
+          <p v-if="endBeforeStart" class="hard-warn">⚠ 结束时间需不早于开始时间，请修正后再保存</p>
+          <p v-else-if="deadlineBeforeStart" class="soft-warn">⚠ 截止早于开始时间，请确认是否正确（仍可保存）</p>
         </div>
       </div>
       <div class="tag-pick">
@@ -334,7 +357,7 @@ function submit() {
       </div>
       <div class="actions">
         <button class="btn" type="button" @click="cancelEdit">{{ editingId ? '取消编辑' : '取消' }}</button>
-        <button class="btn btn-primary" type="button" :disabled="!form.title.trim()" @click="submit">
+        <button class="btn btn-primary" type="button" :disabled="!form.title.trim() || endBeforeStart" @click="submit">
           {{ editingId ? '保存修改' : '保存到工作台' }}
         </button>
       </div>
@@ -366,6 +389,7 @@ function submit() {
                 <div class="title tappable" role="link" tabindex="0" @click="onView(task)" @keydown.enter="onView(task)">
                   {{ task.title }}
                 </div>
+                <div v-if="taskDeadlineBeforeStart(task)" class="time-warn">⚠ 截止早于开始</div>
                 <p v-if="task.description" class="note">{{ task.description }}</p>
                 <div class="tags">
                   <button
@@ -401,7 +425,12 @@ function submit() {
               <td>{{ priorityLabel(task.priority) }}</td>
               <td>
                 <span :class="statusBadgeClass(task.status)">{{ statusLabel(task.status) }}</span>
-                <span v-if="task.delayed" class="badge badge-danger delay-badge">延期</span>
+                <!-- 旧数据仅打 delayed 标（status 未迁移）时补充红标；status=delayed 已由紫色状态徽章表达 -->
+                <span v-if="task.delayed && task.status !== 'delayed'" class="badge badge-danger delay-badge">延期</span>
+                <!-- FIX-6：逾期派生徽章（不写库），随时间自然恢复 -->
+                <span v-if="overdueDays(task, store.today) > 0" class="badge badge-danger delay-badge">
+                  逾期 {{ overdueDays(task, store.today) }} 天
+                </span>
               </td>
               <td>
                 <div class="row-actions">
@@ -422,6 +451,7 @@ function submit() {
                     <option value="pending">待处理</option>
                     <option value="in_progress">进行中</option>
                     <option value="to_confirm">待确认</option>
+                    <option value="delayed">延期处理</option>
                     <option value="done">已完成</option>
                   </select>
                 </div>
@@ -535,6 +565,40 @@ function submit() {
 
 .title.tappable:hover {
   text-decoration: underline;
+}
+
+/* FIX-3：时间语义说明与校验提示 */
+.time-explain {
+  grid-column: 1 / -1;
+  background: #f8fafc;
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+.time-explain .muted {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.time-explain .hard-warn {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.time-explain .soft-warn {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #b45309;
+  font-weight: 600;
+}
+
+.time-warn {
+  font-size: 11px;
+  color: #b45309;
+  margin-bottom: 4px;
 }
 
 .missing-hint {
