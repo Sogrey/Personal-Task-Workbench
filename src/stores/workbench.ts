@@ -404,7 +404,8 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     selectedDate.value = today.value
   }
 
-  function updateTaskStatus(taskId: string, status: TaskStatus) {
+  /** BK-5：reason 供批量操作等场景标注留痕来源（默认工作台手动更新） */
+  function updateTaskStatus(taskId: string, status: TaskStatus, reason = '工作台手动更新') {
     const task = tasks.value.find((t) => t.id === taskId)
     if (!task || task.status === status) return
     const old = task.status
@@ -434,7 +435,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       field: '状态变更',
       oldValue: statusLabel(old),
       newValue: statusLabel(status),
-      reason: '工作台手动更新',
+      reason,
     })
   }
 

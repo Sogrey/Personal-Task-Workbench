@@ -68,6 +68,48 @@ const filtered = computed(() => {
   })
 })
 
+/* ───── BK-5：批量操作（作用于当前筛选结果） ───── */
+const selectedIds = ref<Set<string>>(new Set())
+const allChecked = computed(
+  () => filtered.value.length > 0 && filtered.value.every((t) => selectedIds.value.has(t.id)),
+)
+const someChecked = computed(() => filtered.value.some((t) => selectedIds.value.has(t.id)))
+
+function toggleSelect(id: string) {
+  const next = new Set(selectedIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedIds.value = next
+}
+function toggleSelectAll() {
+  selectedIds.value = allChecked.value ? new Set() : new Set(filtered.value.map((t) => t.id))
+}
+function clearSelection() {
+  selectedIds.value = new Set()
+}
+/** 筛选结果变化时剔除不可见的选中项，保证批量条计数与可见行一致 */
+watch(filtered, (list) => {
+  const visible = new Set(list.map((t) => t.id))
+  const kept = [...selectedIds.value].filter((id) => visible.has(id))
+  if (kept.length !== selectedIds.value.size) selectedIds.value = new Set(kept)
+})
+
+const batchStatus = ref<TaskStatus | ''>('')
+const batchProject = ref('')
+function applyBatchStatus() {
+  if (!batchStatus.value) return
+  const status = batchStatus.value
+  for (const id of selectedIds.value) store.updateTaskStatus(id, status, '批量操作')
+  batchStatus.value = ''
+}
+function applyBatchProject() {
+  if (!batchProject.value) return
+  // '__none__' 哨兵值 = 不关联项目
+  const projectId = batchProject.value === '__none__' ? undefined : batchProject.value
+  for (const id of selectedIds.value) store.updateTask(id, { projectId }, '批量操作')
+  batchProject.value = ''
+}
+
 /** 详情抽屉：支持 URL ?task=<id> 直达（其它页面链接跳入时自动展开），
  *  关闭抽屉时同步移除该参数，刷新页面仍可恢复 */
 const drawerTask = ref<Task | null>(null)
@@ -277,6 +319,29 @@ function submit() {
       </button>
     </div>
 
+    <!-- BK-5：批量操作条（有选中项时显示） -->
+    <section v-if="selectedIds.size" class="card batch-bar">
+      <span class="batch-count">已选 {{ selectedIds.size }} 项</span>
+      <div class="batch-actions">
+        <select v-model="batchStatus" class="batch-select" title="批量修改状态">
+          <option value="">批量改状态…</option>
+          <option value="pending">待处理</option>
+          <option value="in_progress">进行中</option>
+          <option value="to_confirm">待确认</option>
+          <option value="delayed">延期处理</option>
+          <option value="done">已完成</option>
+        </select>
+        <button class="btn" type="button" :disabled="!batchStatus" @click="applyBatchStatus">应用</button>
+        <select v-model="batchProject" class="batch-select" title="批量修改项目">
+          <option value="">批量改项目…</option>
+          <option value="__none__">不关联项目</option>
+          <option v-for="p in store.projects" :key="p.id" :value="p.id">{{ p.name }}</option>
+        </select>
+        <button class="btn" type="button" :disabled="!batchProject" @click="applyBatchProject">应用</button>
+        <button class="btn btn-ghost" type="button" @click="clearSelection">清除选择</button>
+      </div>
+    </section>
+
     <section v-if="showForm" class="card form-card">
       <h3>{{ editingId ? '编辑任务' : '新建任务' }}</h3>
       <div class="form-grid">
@@ -372,6 +437,15 @@ function submit() {
         <table class="data-table">
           <thead>
             <tr>
+              <th class="check-col">
+                <input
+                  type="checkbox"
+                  :checked="allChecked"
+                  :indeterminate="someChecked && !allChecked"
+                  title="全选当前筛选结果"
+                  @change="toggleSelectAll"
+                />
+              </th>
               <th>任务</th>
               <th>项目</th>
               <th>负责人</th>
@@ -384,7 +458,15 @@ function submit() {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="task in filtered" :key="task.id">
+            <tr v-for="task in filtered" :key="task.id" :class="{ selected: selectedIds.has(task.id) }">
+              <td class="check-col">
+                <input
+                  type="checkbox"
+                  :checked="selectedIds.has(task.id)"
+                  :title="`选择「${task.title}」`"
+                  @change="toggleSelect(task.id)"
+                />
+              </td>
               <td>
                 <div class="title tappable" role="link" tabindex="0" @click="onView(task)" @keydown.enter="onView(task)">
                   {{ task.title }}
@@ -458,7 +540,7 @@ function submit() {
               </td>
             </tr>
             <tr v-if="!filtered.length">
-              <td colspan="9" class="empty-hint">暂无符合条件的任务，点击右上角「新建任务」开始安排</td>
+              <td colspan="10" class="empty-hint">暂无符合条件的任务，点击右上角「新建任务」开始安排</td>
             </tr>
           </tbody>
         </table>
@@ -676,6 +758,55 @@ function submit() {
 
 .delay-badge {
   margin-left: 6px;
+}
+
+/* BK-5：批量操作条与选择列 */
+.batch-bar {
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-left: 4px solid var(--primary);
+}
+
+.batch-count {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--primary);
+  white-space: nowrap;
+}
+
+.batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.batch-select {
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.check-col {
+  width: 36px;
+  padding-right: 0;
+}
+
+.check-col input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.data-table tbody tr.selected td {
+  background: var(--primary-soft);
 }
 
 .tags {
