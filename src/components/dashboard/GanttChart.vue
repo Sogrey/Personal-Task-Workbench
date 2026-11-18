@@ -9,32 +9,101 @@ import { formatRangeSmart, toLocalDateKey } from '@/utils/date'
 const store = useWorkbenchStore()
 const router = useRouter()
 
-/** FIX-7：3 天显示窗口——今天居中；今天为周一（本周首日）时今天是窗口第一天，
- *  今天为周日（本周末日）时今天是窗口第三天；浏览其它周时取该周中间 3 天 */
-const WINDOW_DAYS = 3
+/** FIX-9：窗口跨度模式——3 天（默认，今天居中）/ 7 天（整周）/ 整月（横向滚动） */
+type SpanMode = 3 | 7 | 'month'
+const span = ref<SpanMode>(3)
+const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 
-const visibleDays = computed(() => {
-  const days = store.weekDays
-  const todayIdx = days.findIndex((d) => toLocalDateKey(d) === store.today)
-  const startIdx = todayIdx < 0 ? 2 : Math.max(0, Math.min(4, todayIdx - 1))
-  return days.slice(startIdx, startIdx + WINDOW_DAYS).map((d, i) => ({
-    date: d,
-    key: toLocalDateKey(d),
-    label: ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()],
-    isWeekend: d.getDay() === 0 || d.getDay() === 6,
-    isToday: toLocalDateKey(d) === store.today,
-    idx: i,
-  }))
-})
+function addDays(d: Date, n: number) {
+  const x = new Date(d)
+  x.setDate(x.getDate() + n)
+  return x
+}
+function startOfDay(d: Date) {
+  const x = new Date(d)
+  x.setHours(0, 0, 0, 0)
+  return x
+}
+/** 周一=0 的周内索引 */
+function mondayIndex(d: Date) {
+  return (d.getDay() + 6) % 7
+}
+/** 定位日 → 窗口首日（3 天：今天居中，周一为窗口首日/周日为窗口末日；7 天：本周一；整月：1 号） */
+function defaultWindowStart(focus: Date, mode: SpanMode) {
+  const day = startOfDay(focus)
+  if (mode === 3) {
+    const idx = mondayIndex(day)
+    if (idx === 0) return day
+    if (idx === 6) return addDays(day, -2)
+    return addDays(day, -1)
+  }
+  if (mode === 7) return addDays(day, -mondayIndex(day))
+  return new Date(day.getFullYear(), day.getMonth(), 1)
+}
 
-/** 展示范围：与周视图同源切换周；FIX-7：仅显示窗口 3 天日期范围 */
+const windowStartDate = ref(defaultWindowStart(new Date(), 3))
+
+const windowDays = computed(() =>
+  span.value === 'month'
+    ? new Date(windowStartDate.value.getFullYear(), windowStartDate.value.getMonth() + 1, 0).getDate()
+    : span.value,
+)
+
+const visibleDays = computed(() =>
+  Array.from({ length: windowDays.value }, (_, i) => {
+    const d = addDays(windowStartDate.value, i)
+    return {
+      date: d,
+      key: toLocalDateKey(d),
+      label: WEEKDAY_LABELS[d.getDay()],
+      isWeekend: d.getDay() === 0 || d.getDay() === 6,
+      isToday: toLocalDateKey(d) === store.today,
+      idx: i,
+    }
+  }),
+)
+
+/** 展示范围标签与跨度标签 */
 const rangeLabel = computed(() => {
   const days = visibleDays.value
   const a = days[0]?.date
-  const b = days[2]?.date
+  const b = days[days.length - 1]?.date
   if (!a || !b) return ''
   return `${a.getMonth() + 1}/${a.getDate()} – ${b.getMonth() + 1}/${b.getDate()}`
 })
+
+const spanLabel = computed(() => (span.value === 'month' ? '整月' : `${windowDays.value} 天`))
+
+const prevTitle = computed(() => (span.value === 3 ? '前一天' : span.value === 7 ? '上一周' : '上一月'))
+const nextTitle = computed(() => (span.value === 3 ? '后一天' : span.value === 7 ? '下一周' : '下一月'))
+
+/** FIX-9：滚动一步 = 3 天模式±1 天 / 7 天模式±7 天 / 整月模式±1 月 */
+function shiftWindow(dir: 1 | -1) {
+  const d = windowStartDate.value
+  if (span.value === 3) windowStartDate.value = addDays(d, dir)
+  else if (span.value === 7) windowStartDate.value = addDays(d, dir * 7)
+  else windowStartDate.value = new Date(d.getFullYear(), d.getMonth() + dir, 1)
+}
+
+function goToday() {
+  windowStartDate.value = defaultWindowStart(new Date(), span.value)
+}
+
+/** 切换跨度：以当前窗口中心日为定位日重新计算，保持浏览位置不跳变 */
+function setSpan(mode: SpanMode) {
+  if (span.value === mode) return
+  const days = visibleDays.value
+  const center = days[Math.floor(days.length / 2)]?.date ?? new Date()
+  span.value = mode
+  windowStartDate.value = defaultWindowStart(center, mode)
+}
+
+/** 列最小宽与网格变量（整月列多 → 横向滚动） */
+const colMin = computed(() => (span.value === 'month' ? 88 : span.value === 7 ? 120 : 160))
+const gridVars = computed(() => ({
+  '--days': `${windowDays.value}`,
+  '--col-min': `${colMin.value}px`,
+}))
 
 /** 窗口内任务行：与窗口有交集的活动任务（跨窗口延伸裁剪显示，窗口外不渲染）；
  *  FIX-8：行存起止绝对分钟（相对窗口首日 00:00），位置由分段线性映射展开工作时段 */
@@ -55,8 +124,7 @@ const windowStart = computed(() => {
 
 const rows = computed<GanttRow[]>(() => {
   const start = windowStart.value
-  const end = new Date(start)
-  end.setDate(start.getDate() + WINDOW_DAYS)
+  const end = addDays(start, windowDays.value)
   return store.tasks
     .filter((t) => t.status !== 'cancelled')
     .filter((t) => +new Date(t.startAt) < +end && +new Date(t.endAt) > +start)
@@ -96,9 +164,9 @@ function dayMinuteToPct(min: number) {
 
 /** 窗口内绝对分钟（相对窗口首日 00:00，含多日）→ 窗口总宽百分比（映射单调，跨天/跨夜条连续） */
 function windowPct(min: number) {
-  const dayIdx = Math.min(WINDOW_DAYS - 1, Math.floor(min / 1440))
+  const dayIdx = Math.min(windowDays.value - 1, Math.floor(min / 1440))
   const inDay = min - dayIdx * 1440
-  return (dayIdx + dayMinuteToPct(inDay) / 100) * (100 / WINDOW_DAYS)
+  return (dayIdx + dayMinuteToPct(inDay) / 100) * (100 / windowDays.value)
 }
 
 /** 每天的工作时段刻度：工作始 / 午间 / 工作末（HH:00 格式，FIX-8 按新映射拉开位置） */
@@ -118,7 +186,7 @@ const dayTicks = computed<DayTick[]>(() => {
       ticks.push({
         key: `${d.key}-${h}`,
         label: `${String(h).padStart(2, '0')}:00`,
-        pct: (dayIdx + dayMinuteToPct(h * 60) / 100) * (100 / WINDOW_DAYS),
+        pct: (dayIdx + dayMinuteToPct(h * 60) / 100) * (100 / windowDays.value),
       })
     }
   })
@@ -128,8 +196,8 @@ const dayTicks = computed<DayTick[]>(() => {
 /** FIX-8：每日工作时段底带（浅色背景辅助读图，位置随新映射） */
 const workBands = computed(() =>
   visibleDays.value.map((d, i) => {
-    const left = (i + dayMinuteToPct(store.workHours.start * 60) / 100) * (100 / WINDOW_DAYS)
-    const right = (i + dayMinuteToPct(store.workHours.end * 60) / 100) * (100 / WINDOW_DAYS)
+    const left = (i + dayMinuteToPct(store.workHours.start * 60) / 100) * (100 / windowDays.value)
+    const right = (i + dayMinuteToPct(store.workHours.end * 60) / 100) * (100 / windowDays.value)
     return { key: d.key, left: `${left}%`, width: `${right - left}%` }
   }),
 )
@@ -157,7 +225,7 @@ const nowLineLeftPct = computed(() => {
   const now = new Date()
   const dayIdx = visibleDays.value.findIndex((d) => d.key === toLocalDateKey(now))
   if (dayIdx < 0) return null
-  return (dayIdx + dayMinuteToPct(now.getHours() * 60 + now.getMinutes()) / 100) * (100 / WINDOW_DAYS)
+  return (dayIdx + dayMinuteToPct(now.getHours() * 60 + now.getMinutes()) / 100) * (100 / windowDays.value)
 })
 
 const scrollBody = ref<HTMLElement | null>(null)
@@ -222,14 +290,19 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
 </script>
 
 <template>
-  <section class="card gantt">
+  <section class="card gantt" :style="gridVars">
     <div class="card-title">
       <span>任务甘特图</span>
       <div class="tools">
-        <span class="muted">{{ rangeLabel }} · 3 天窗口</span>
-        <button class="btn btn-ghost" type="button" @click="store.shiftWeek(-1)">‹</button>
-        <button class="btn" type="button" @click="store.goTodayWeek()">今天</button>
-        <button class="btn btn-ghost" type="button" @click="store.shiftWeek(1)">›</button>
+        <span class="muted">{{ rangeLabel }} · {{ spanLabel }}</span>
+        <div class="span-switch">
+          <button type="button" class="span-tab" :class="{ on: span === 3 }" @click="setSpan(3)">3 天</button>
+          <button type="button" class="span-tab" :class="{ on: span === 7 }" @click="setSpan(7)">7 天</button>
+          <button type="button" class="span-tab" :class="{ on: span === 'month' }" @click="setSpan('month')">整月</button>
+        </div>
+        <button class="btn btn-ghost" type="button" :title="prevTitle" @click="shiftWindow(-1)">‹</button>
+        <button class="btn" type="button" title="回到今天" @click="goToday">今天</button>
+        <button class="btn btn-ghost" type="button" :title="nextTitle" @click="shiftWindow(1)">›</button>
         <button v-if="nowLineLeftPct !== null" class="btn" type="button" @click="scrollNowIntoView">回到此刻</button>
       </div>
     </div>
@@ -282,14 +355,14 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
             :key="d.key"
             class="day-col-bg"
             :class="{ weekend: d.isWeekend, today: d.isToday }"
-            :style="{ left: `${(100 / WINDOW_DAYS) * d.idx}%`, width: `${100 / WINDOW_DAYS}%` }"
+            :style="{ left: `${(100 / windowDays) * d.idx}%`, width: `${100 / windowDays}%` }"
           />
 
           <!-- FIX-8：每日工作时段底带（工作区间浅色，宽度=列宽 75%） -->
           <div v-for="b in workBands" :key="`wb-${b.key}`" class="work-band" :style="{ left: b.left, width: b.width }" />
 
           <!-- 交叉天分隔竖线 -->
-          <div v-for="i in WINDOW_DAYS - 1" :key="`v-${i}`" class="day-sep" :style="{ left: `${(100 / WINDOW_DAYS) * i}%` }" />
+          <div v-for="i in windowDays - 1" :key="`v-${i}`" class="day-sep" :style="{ left: `${(100 / windowDays) * i}%` }" />
 
           <!-- 任务条：每行一任务，条内按窗口内连续时间水平定位 -->
           <div v-for="row in rows" :key="row.task.id" class="bar-row">
@@ -362,6 +435,31 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
   gap: 6px;
 }
 
+/* FIX-9：跨度切换（3 天 / 7 天 / 整月） */
+.span-switch {
+  display: inline-flex;
+  background: #eef2f7;
+  border-radius: 9px;
+  padding: 2px;
+}
+
+.span-tab {
+  border: none;
+  background: transparent;
+  padding: 4px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.span-tab.on {
+  background: #fff;
+  color: var(--text);
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
+}
+
 .gantt-wrap {
   overflow: auto;
   border: 1px solid var(--border);
@@ -369,10 +467,10 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
   max-height: 640px;
 }
 
-/* 顶部日期行：左角 + 3 天窗口（列宽充裕，短任务条内容不再截断） */
+/* 顶部日期行：左角 + N 天窗口（列数/最小列宽由 --days/--col-min 驱动，整月横向滚动） */
 .gantt-head {
   display: grid;
-  grid-template-columns: 180px repeat(3, minmax(160px, 1fr));
+  grid-template-columns: 180px repeat(var(--days, 3), minmax(var(--col-min, 160px), 1fr));
   position: sticky;
   top: 0;
   z-index: 5;
@@ -383,7 +481,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
 /* 小时刻度行：与日期列同构 */
 .hour-head {
   display: grid;
-  grid-template-columns: 180px minmax(480px, 1fr);
+  grid-template-columns: 180px minmax(calc(var(--days, 3) * var(--col-min, 160px)), 1fr);
   position: sticky;
   top: 48px;
   z-index: 5;
@@ -461,7 +559,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
 
 .gantt-body {
   display: grid;
-  grid-template-columns: 180px minmax(480px, 1fr); /* 3 天 × 160px 最小宽度 */
+  grid-template-columns: 180px minmax(calc(var(--days, 3) * var(--col-min, 160px)), 1fr);
   position: relative;
 }
 
