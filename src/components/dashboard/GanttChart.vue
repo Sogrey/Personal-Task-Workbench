@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { statusLabel, useWorkbenchStore } from '@/stores/workbench'
 import type { Task } from '@/types'
@@ -85,8 +85,11 @@ function shiftWindow(dir: 1 | -1) {
   else windowStartDate.value = new Date(d.getFullYear(), d.getMonth() + dir, 1)
 }
 
+/** FIX-11：合并原「回到此刻」职责——窗口不含今天时重置范围；
+ *  已含今天时视口滚到现在线附近（整月横向滚动场景），一键回到今天与此刻 */
 function goToday() {
   windowStartDate.value = defaultWindowStart(new Date(), span.value)
+  void nextTick(() => scrollNowIntoView())
 }
 
 /** 切换跨度：以当前窗口中心日为定位日重新计算，保持浏览位置不跳变 */
@@ -301,9 +304,8 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
           <button type="button" class="span-tab" :class="{ on: span === 'month' }" @click="setSpan('month')">整月</button>
         </div>
         <button class="btn btn-ghost" type="button" :title="prevTitle" @click="shiftWindow(-1)">‹</button>
-        <button class="btn" type="button" title="回到今天" @click="goToday">今天</button>
+        <button class="btn" type="button" title="回到今天与此刻" @click="goToday">今天</button>
         <button class="btn btn-ghost" type="button" :title="nextTitle" @click="shiftWindow(1)">›</button>
-        <button v-if="nowLineLeftPct !== null" class="btn" type="button" @click="scrollNowIntoView">回到此刻</button>
       </div>
     </div>
 
