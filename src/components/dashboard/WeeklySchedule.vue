@@ -69,6 +69,11 @@ function layoutDay(tasks: Task[], day: Date): LaidBlock[] {
   const dayStr = dayKey(day)
   const sorted = [...tasks].sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
   const result: LaidBlock[] = []
+  // BK-19：已完成任务（含提前完成）不参与重叠簇——不叠块、不计「+N」、不进「时间重叠」面板；
+  // 与冲突口径一致（已完成不再算时间重叠），平铺底层灰显供对照
+  const doneTasks = sorted.filter((t) => t.status === 'done')
+  const activeSorted = sorted.filter((t) => t.status !== 'done')
+  for (const task of doneTasks) pushBlock(task, 0, [task], false, 0)
   let cluster: Task[] = []
   let clusterEnd = 0
 
@@ -99,7 +104,7 @@ function layoutDay(tasks: Task[], day: Date): LaidBlock[] {
     return { startMin, endMin, crossDay, dayRangeText }
   }
 
-  function pushBlock(task: Task, colIndex: number, clusterTasks: Task[], showBadge: boolean) {
+  function pushBlock(task: Task, colIndex: number, clusterTasks: Task[], showBadge: boolean, baseZ = 1) {
     const { startMin, endMin, crossDay, dayRangeText } = effectiveRange(task)
     const total = (HOUR_END - HOUR_START) * 60
     const top = Math.max(0, (startMin / total) * 100)
@@ -114,7 +119,7 @@ function layoutDay(tasks: Task[], day: Date): LaidBlock[] {
       height: `${height}%`,
       left: `${leftPx}px`,
       width: `calc(100% - ${leftPx + rightPx}px)`,
-      zIndex: colIndex + 1,
+      zIndex: colIndex + baseZ,
       conflict,
       done: task.status === 'done',
       color,
@@ -162,7 +167,7 @@ function layoutDay(tasks: Task[], day: Date): LaidBlock[] {
     clusterEnd = 0
   }
 
-  for (const task of sorted) {
+  for (const task of activeSorted) {
     const s = +new Date(task.startAt)
     const e = +new Date(task.endAt)
     if (cluster.length && s >= clusterEnd) flush()
@@ -236,6 +241,11 @@ function onBlockClick(e: MouseEvent, block: LaidBlock) {
   e.stopPropagation()
   window.clearTimeout(showTimer)
   hoverCard.value = null
+  // BK-19：已完成任务（含提前完成）不算时间重叠——点击直接查看详情，不弹「时间重叠」面板
+  if (block.task.status === 'done') {
+    openTaskDetail(block.task)
+    return
+  }
   const tasks = [...block.cluster].sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
   const panelH = Math.min(120 + tasks.length * 64, 420)
   clickPanel.value = {
