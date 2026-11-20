@@ -27,6 +27,7 @@
 | —  | 已完成任务不参与时间重叠（冲突计算/周视图重叠簇/面板全口径豁免）        | ✅ 已交付（e2e 11/11，type-check/lint 零错误） |
 | —  | FIX-13 表单标签 chip 显示专属颜色（新建/编辑/拆分共用表单）          | ✅ 已交付（e2e 3/3，截图确认色彩区分清晰） |
 | —  | BK-20 真实执行时间（actualStart/图表按实际时段渲染）+ 状态流转顺序      | ✅ 已交付（e2e 9/9，全量回归 50 项通过） |
+| —  | BK-21 Pages 部署：vite base + GitHub Actions CI/CD（push main 自动发布）  | ✅ 已交付（构建产物验证 + e2e 37/37 on base 路径） |
 | M5 | 报告 AI 总结润色                                  | ⬜ 未开始（PRD §5.10 二期计划）                |
 | M6 | 后端对接 / 登录                                   | ⬜ 未开始                                |
 
@@ -186,6 +187,16 @@
   3. **状态选项顺序**：`TASK_STATUS_OPTIONS` 重排为待确认/待处理/延期处理/进行中/已完成/已取消，筛选/批量/表单/行内/抽屉五处下拉统一（BK-7 单一来源一次生效）。
   4. **顺带修复**：store 9 处 `new Date().toISOString()` 违反"禁 toISOString"铁律（updatedAt 存成 UTC、显示偏 8 小时），统一改 `toLocalIsoNow()`；PRD §6.1 补齐 completedAt/delayed/delayNote 漏记字段。
 * 验证：e2e 9/9——下拉顺序断言；切「进行中」actualStart≈当前时刻、再切「已完成」completedAt≈当前且保留 actualStart；甘特图已完成条显示实际 09:00–10:30（非计划 14:00–16:00）、进行中条 09:05–17:00；周视图已完成块灰显 meta=实际时段、进行中块实际开始；抽屉计划时段与实际开始/实际完成同屏。全量回归 50 项通过（父子层级 19/19、冲突豁免 11/11、P0 三项 17/17、标签 chip 3/3）（2026-11-20）。
+
+### BK-21 GitHub Pages 部署与 CI（本轮转正）✅
+
+* 背景（用户需求 2026-11-20）：Vite base 改为 `Personal-Task-Workbench`（Pages 子路径），并建 CI/CD——推送提交自动构建发布 GitHub Pages。
+* 改动：
+  1. **base 路径**：`vite.config.ts` + `base: '/Personal-Task-Workbench/'`；router 已用 `import.meta.env.BASE_URL` 自动跟随，无需改动；构建产物 index.html 的 favicon/assets 由 Vite 自动重写为带前缀路径（实测确认）。
+  2. **CI/CD**：`.github/workflows/deploy.yml`——push main / 手动触发；pnpm 12 + Node 22（`pnpm install --frozen-lockfile`，与仓库 pnpm-lock.yaml 匹配）；流水线含 lint → build（含 type-check）；`cp dist/index.html dist/404.html` 作 SPA history 路由在 Pages 上的刷新兜底；`upload-pages-artifact` + `deploy-pages`（v4）发布，concurrency group=pages 防并发。
+  3. **e2e 适配**：5 个在用 e2e 脚本 BASE 加 `/Personal-Task-Workbench` 前缀；e2e-conflict 的 URL 断言同步前缀（历史 FIX 存档脚本待复用时再适配）。
+* 前置要求（部署前确认一次）：仓库 Settings → Pages → Source 选 **GitHub Actions**；私有仓库 Pages 需 Pro 账户。
+* 验证：`npm run build` 本地构建通过，dist/index.html 资源全部带 `/Personal-Task-Workbench/` 前缀、favicon 复制正确、404.html 兜底生成；dev server base 生效后 e2e-actual 9/9、e2e-p0 17/17、e2e-conflict 11/11 全部通过（含 base 前缀 URL 断言）（2026-11-20）。
 
 ### FIX-8 甘特图行高紧凑与工作时段展开（P1）✅
 
