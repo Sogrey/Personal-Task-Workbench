@@ -100,7 +100,7 @@
 
 ### 5.2 今日任务 / 任务管理（P0）
 
-- 任务字段：标题、描述（备注）、所属项目、负责人、对接人、开始/截止时间、优先级、状态、标签、是否全天。
+- 任务字段：标题、描述（备注）、所属项目、父级任务（可选，两级层级）、负责人、对接人、开始/截止时间、优先级、状态、标签、是否全天。
 - 状态枚举：`待处理` | `进行中` | `待确认` | `已完成` | `已取消`。
 - 优先级：`低` | `中` | `高` | `紧急`。
 - 支持筛选（状态/项目/标签/负责人/日期）、搜索、新建/编辑/完成。
@@ -209,13 +209,14 @@ v1 可用本地 mock / localStorage；后续接后端。
   title: string
   description?: string
   projectId?: string
+  parentId?: string   // 父级任务 id（两级层级：父任务不能再挂父级；子任务可解除关联成为独立任务）
   owner: string
   contact?: string  // 对接人（客户/协作方联系人）
   startAt: string   // ISO
   endAt: string     // ISO
   deadline?: string // ISO
   priority: 'low' | 'medium' | 'high' | 'urgent'
-  status: 'pending' | 'in_progress' | 'to_confirm' | 'done' | 'cancelled'
+  status: 'pending' | 'in_progress' | 'to_confirm' | 'delayed' | 'done' | 'cancelled'  // delayed 为 FIX-6 扩展（延期处理）
   tagIds: string[]
   createdAt: string
   updatedAt: string
