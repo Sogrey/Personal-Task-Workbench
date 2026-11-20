@@ -196,6 +196,23 @@ export const useWorkbenchStore = defineStore('workbench', () => {
 
   const activeTasks = computed(() => tasks.value.filter((t) => t.status !== 'cancelled'))
 
+  /** BK-17：aId 是否为 task 的祖先（任意层级，含环防御） */
+  function isAncestorOf(aId: string, task: Task): boolean {
+    let cur = task.parentId
+    const seen = new Set<string>([task.id])
+    while (cur && !seen.has(cur)) {
+      if (cur === aId) return true
+      seen.add(cur)
+      const parent = tasks.value.find((t) => t.id === cur)
+      if (!parent) break
+      cur = parent.parentId
+    }
+    return false
+  }
+
+  /** BK-17：冲突口径——同一负责人时间重叠算冲突，但直系祖先后代对豁免：
+   *  子任务拆自父任务、时间天然落在父任务区间内，属于正常拆分细化而非撞档；
+   *  兄弟任务（含不同父）之间重叠仍算冲突。 */
   const conflictPairs = computed(() => {
     const pairs: { owner: string; tasks: [Task, Task] }[] = []
     const list = activeTasks.value.filter((t) => t.status !== 'done')
@@ -204,6 +221,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
         const a = list[i]!
         const b = list[j]!
         if (a.owner !== b.owner) continue
+        if (isAncestorOf(a.id, b) || isAncestorOf(b.id, a)) continue
         if (
           overlaps(parseDate(a.startAt), parseDate(a.endAt), parseDate(b.startAt), parseDate(b.endAt))
         ) {
