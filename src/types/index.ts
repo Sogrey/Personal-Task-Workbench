@@ -23,6 +23,8 @@ export interface Task {
   title: string
   description?: string
   projectId?: string
+  /** 父级任务 id（两级层级：父任务不能再挂父级；子任务可解除关联成为独立任务） */
+  parentId?: string
   owner: string
   contact?: string
   startAt: string

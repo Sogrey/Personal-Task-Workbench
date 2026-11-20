@@ -39,6 +39,7 @@ watch(
 const form = reactive({
   title: '',
   projectId: store.projects[0]?.id ?? '',
+  parentId: '',
   owner: store.prefs.ownerName,
   contact: '',
   description: '',
@@ -50,31 +51,93 @@ const form = reactive({
   tagIds: [] as string[],
 })
 
+/** 单任务是否满足当前筛选条件（父任务与子任务共用同一谓词） */
+function matchesFilter(t: Task, q: string) {
+  if (t.status === 'cancelled' && statusFilter.value !== 'cancelled') return false
+  if (statusFilter.value !== 'all' && t.status !== statusFilter.value) return false
+  if (priorityFilter.value !== 'all' && t.priority !== priorityFilter.value) return false
+  if (projectFilter.value && t.projectId !== projectFilter.value) return false
+  if (tagFilter.value && !t.tagIds.includes(tagFilter.value)) return false
+  // 按任务开始时间落在所选日期区间过滤
+  if (dateFrom.value && t.startAt.slice(0, 10) < dateFrom.value) return false
+  if (dateTo.value && t.startAt.slice(0, 10) > dateTo.value) return false
+  if (!q) return true
+  const project = store.projectById(t.projectId)?.name ?? ''
+  const tagText = t.tagIds.map((id) => store.tagById(id)?.name ?? '').join(' ')
+  return [t.title, t.owner, t.contact ?? '', t.description ?? '', project, tagText].join(' ').toLowerCase().includes(q)
+}
+
+/** BK-15：筛选结果保持父子相邻——子任务紧跟其父任务输出；父任务被筛掉时子任务按原顺序独立显示 */
 const filtered = computed(() => {
   const q = keyword.value.trim().toLowerCase()
-  return store.tasks.filter((t) => {
-    // 已取消任务默认隐藏（避免列表噪音），仅在明确筛选「已取消」时展示
-    if (t.status === 'cancelled' && statusFilter.value !== 'cancelled') return false
-    if (statusFilter.value !== 'all' && t.status !== statusFilter.value) return false
-    if (priorityFilter.value !== 'all' && t.priority !== priorityFilter.value) return false
-    if (projectFilter.value && t.projectId !== projectFilter.value) return false
-    if (tagFilter.value && !t.tagIds.includes(tagFilter.value)) return false
-    // 按任务开始时间落在所选日期区间过滤
-    if (dateFrom.value && t.startAt.slice(0, 10) < dateFrom.value) return false
-    if (dateTo.value && t.startAt.slice(0, 10) > dateTo.value) return false
-    if (!q) return true
-    const project = store.projectById(t.projectId)?.name ?? ''
-    const tagText = t.tagIds.map((id) => store.tagById(id)?.name ?? '').join(' ')
-    return [t.title, t.owner, t.contact ?? '', t.description ?? '', project, tagText].join(' ').toLowerCase().includes(q)
-  })
+  const matched = store.tasks.filter((t) => matchesFilter(t, q))
+  const matchedIds = new Set(matched.map((t) => t.id))
+  const out: Task[] = []
+  const emitted = new Set<string>()
+  for (const t of matched) {
+    if (emitted.has(t.id)) continue
+    if (t.parentId) {
+      const parentVisible = matchedIds.has(t.parentId) && !emitted.has(t.parentId)
+      if (parentVisible) continue // 父任务稍后出现时统一带出，保持父前子后
+    }
+    out.push(t)
+    emitted.add(t.id)
+    if (!t.parentId) {
+      for (const c of store.tasks) {
+        if (c.parentId === t.id && matchedIds.has(c.id) && !emitted.has(c.id)) {
+          out.push(c)
+          emitted.add(c.id)
+        }
+      }
+    }
+  }
+  return out
 })
 
-/* ───── BK-5：批量操作（作用于当前筛选结果） ───── */
+/* ───── BK-15：父子层级展示 ───── */
+/** 折叠的父任务 id 集（默认全展开） */
+const collapsedIds = ref<Set<string>>(new Set())
+/** 可见行：被折叠父任务的子任务不渲染、不参与勾选与全选 */
+const visibleTasks = computed(() =>
+  filtered.value.filter((t) => !t.parentId || !collapsedIds.value.has(t.parentId)),
+)
+
+function toggleCollapse(taskId: string) {
+  const next = new Set(collapsedIds.value)
+  if (next.has(taskId)) next.delete(taskId)
+  else next.add(taskId)
+  collapsedIds.value = next
+}
+
+/** 可选父任务池：无父级的任务（保证两级层级），排除编辑中的自身 */
+const parentCandidates = computed(() => store.tasks.filter((t) => !t.parentId && t.id !== editingId.value))
+/** 编辑中的任务已有子任务时不能再挂父级（避免三层） */
+const editingHasChildren = computed(() => {
+  if (!editingId.value) return false
+  return store.tasks.some((t) => t.parentId === editingId.value)
+})
+
+/** 行内「拆分」：为该任务快速创建子任务（预填父级） */
+function openCreateChild(task: Task) {
+  cancelEdit()
+  form.parentId = task.id
+  showForm.value = true
+  nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
+}
+
+/** 子任务行的父任务标注：仅当父任务不在当前可见列表时返回其标题 */
+function parentTitleOf(task: Task) {
+  if (!task.parentId) return undefined
+  if (visibleTasks.value.some((t) => t.id === task.parentId)) return undefined
+  return store.tasks.find((t) => t.id === task.parentId)?.title
+}
+
+/* ───── BK-5：批量操作（作用于当前可见行，折叠隐藏的子任务不参与） ───── */
 const selectedIds = ref<Set<string>>(new Set())
 const allChecked = computed(
-  () => filtered.value.length > 0 && filtered.value.every((t) => selectedIds.value.has(t.id)),
+  () => visibleTasks.value.length > 0 && visibleTasks.value.every((t) => selectedIds.value.has(t.id)),
 )
-const someChecked = computed(() => filtered.value.some((t) => selectedIds.value.has(t.id)))
+const someChecked = computed(() => visibleTasks.value.some((t) => selectedIds.value.has(t.id)))
 
 function toggleSelect(id: string) {
   const next = new Set(selectedIds.value)
@@ -83,13 +146,13 @@ function toggleSelect(id: string) {
   selectedIds.value = next
 }
 function toggleSelectAll() {
-  selectedIds.value = allChecked.value ? new Set() : new Set(filtered.value.map((t) => t.id))
+  selectedIds.value = allChecked.value ? new Set() : new Set(visibleTasks.value.map((t) => t.id))
 }
 function clearSelection() {
   selectedIds.value = new Set()
 }
-/** 筛选结果变化时剔除不可见的选中项，保证批量条计数与可见行一致 */
-watch(filtered, (list) => {
+/** 筛选/折叠变化时剔除不可见的选中项，保证批量条计数与可见行一致 */
+watch(visibleTasks, (list) => {
   const visible = new Set(list.map((t) => t.id))
   const kept = [...selectedIds.value].filter((id) => visible.has(id))
   if (kept.length !== selectedIds.value.size) selectedIds.value = new Set(kept)
@@ -201,6 +264,7 @@ function startEdit(task: Task) {
   showForm.value = true
   form.title = task.title
   form.projectId = task.projectId ?? ''
+  form.parentId = task.parentId ?? ''
   form.owner = task.owner
   form.contact = task.contact ?? ''
   form.description = task.description ?? ''
@@ -217,6 +281,7 @@ function resetForm() {
   editingId.value = null
   form.title = ''
   form.projectId = ''
+  form.parentId = ''
   form.owner = store.prefs.ownerName
   form.contact = ''
   form.description = ''
@@ -261,9 +326,13 @@ function submit() {
   if (!form.title.trim()) return
   // FIX-3 硬校验：结束不早于开始，否则拦截保存
   if (endBeforeStart.value) return
+  // BK-15 两级层级防御：有子任务的任务不能再挂父级，父级不能是自己（正常操作下由下拉禁用保证）
+  if (form.parentId && form.parentId === editingId.value) return
+  if (form.parentId && editingId.value && store.tasks.some((t) => t.parentId === editingId.value)) return
   const payload = {
     title: form.title.trim(),
     projectId: form.projectId || undefined,
+    parentId: form.parentId || undefined,
     owner: form.owner,
     contact: form.contact.trim() || undefined,
     description: form.description.trim() || undefined,
@@ -366,6 +435,13 @@ function submit() {
           </select>
         </div>
         <div class="field">
+          <label>父任务（可选，拆分为子任务）</label>
+          <select v-model="form.parentId" :disabled="editingHasChildren">
+            <option value="">无（独立任务）</option>
+            <option v-for="p in parentCandidates" :key="p.id" :value="p.id">{{ p.title }}</option>
+          </select>
+        </div>
+        <div class="field">
           <label>负责人</label>
           <input v-model="form.owner" />
         </div>
@@ -414,6 +490,7 @@ function submit() {
           <p class="muted">「开始/结束」= 计划执行时段（占哪天的哪几个小时，驱动日历色块与时间投入）；「截止」= 完成期限（最晚交付时间，驱动逾期与临期提醒），可与执行时段无关。</p>
           <p v-if="endBeforeStart" class="hard-warn">⚠ 结束时间需不早于开始时间，请修正后再保存</p>
           <p v-else-if="deadlineBeforeStart" class="soft-warn">⚠ 截止早于开始时间，请确认是否正确（仍可保存）</p>
+          <p v-if="editingHasChildren" class="hard-warn">⚠ 该任务已有子任务，不能再挂到其他任务下（保持两级层级）</p>
         </div>
       </div>
       <div class="tag-pick">
@@ -466,7 +543,11 @@ function submit() {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="task in filtered" :key="task.id" :class="{ selected: selectedIds.has(task.id) }">
+            <tr
+              v-for="task in visibleTasks"
+              :key="task.id"
+              :class="{ selected: selectedIds.has(task.id), 'child-row': !!task.parentId }"
+            >
               <td class="check-col">
                 <input
                   type="checkbox"
@@ -476,8 +557,28 @@ function submit() {
                 />
               </td>
               <td>
-                <div class="title tappable" role="link" tabindex="0" @click="onView(task)" @keydown.enter="onView(task)">
+                <div
+                  class="title tappable"
+                  :class="{ 'child-title': !!task.parentId }"
+                  role="link"
+                  tabindex="0"
+                  @click="onView(task)"
+                  @keydown.enter="onView(task)"
+                >
+                  <button
+                    v-if="!task.parentId && store.childProgress(task.id)"
+                    class="collapse-btn"
+                    type="button"
+                    :title="collapsedIds.has(task.id) ? '展开子任务' : '折叠子任务'"
+                    @click.stop="toggleCollapse(task.id)"
+                  >
+                    {{ collapsedIds.has(task.id) ? '▸' : '▾' }}
+                  </button>
+                  <span v-if="task.parentId" class="child-mark">↳</span>
                   {{ task.title }}
+                </div>
+                <div v-if="parentTitleOf(task)" class="parent-ref">
+                  ↳ 父任务「{{ parentTitleOf(task) }}」不在当前筛选结果
                 </div>
                 <div v-if="taskDeadlineBeforeStart(task)" class="time-warn">⚠ 截止早于开始</div>
                 <p v-if="task.description" class="note">{{ task.description }}</p>
@@ -515,6 +616,13 @@ function submit() {
               <td>{{ priorityLabel(task.priority) }}</td>
               <td>
                 <span :class="statusBadgeClass(task.status)">{{ statusLabel(task.status) }}</span>
+                <span
+                  v-if="!task.parentId && store.childProgress(task.id)"
+                  class="badge badge-info child-badge"
+                  :title="`子任务 ${store.childProgress(task.id)!.done}/${store.childProgress(task.id)!.total} 已完成`"
+                >
+                  子 {{ store.childProgress(task.id)!.done }}/{{ store.childProgress(task.id)!.total }}
+                </span>
                 <!-- 旧数据仅打 delayed 标（status 未迁移）时补充红标；status=delayed 已由紫色状态徽章表达 -->
                 <span v-if="task.delayed && task.status !== 'delayed'" class="badge badge-danger delay-badge">延期</span>
                 <!-- FIX-6：逾期派生徽章（不写库），随时间自然恢复 -->
@@ -524,6 +632,9 @@ function submit() {
               </td>
               <td>
                 <div class="row-actions">
+                  <button v-if="!task.parentId" class="btn btn-ghost split-btn" type="button" title="拆分为子任务" @click="openCreateChild(task)">
+                    拆分
+                  </button>
                   <button class="btn btn-ghost view-btn" type="button" @click="onView(task)">查看</button>
                   <button
                     class="btn btn-ghost edit-btn"
@@ -558,7 +669,7 @@ function submit() {
 
     <div v-if="taskMissing" class="missing-hint card">未找到对应的任务，可能已被删除或数据未同步</div>
 
-    <TaskDetailDrawer :task="drawerTask" @close="closeDrawer" @edit="onDrawerEdit" @delete="removeTask" />
+    <TaskDetailDrawer :task="drawerTask" @close="closeDrawer" @edit="onDrawerEdit" @delete="removeTask" @goto="onView" />
   </div>
 </template>
 
@@ -764,6 +875,60 @@ function submit() {
   height: 32px;
   font-size: 12px;
   color: var(--danger);
+}
+
+/* ───── BK-15：父子层级展示 ───── */
+.split-btn {
+  padding: 0 8px;
+  height: 32px;
+  font-size: 12px;
+  color: #d97706;
+}
+
+.collapse-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin-right: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.collapse-btn:hover {
+  background: #f1f5f9;
+}
+
+.child-title {
+  padding-left: 18px;
+}
+
+.child-mark {
+  color: var(--text-secondary);
+  margin-right: 2px;
+}
+
+.child-row {
+  background: #fafbfd;
+}
+
+.child-row.selected {
+  background: var(--primary-soft, #eef6ff);
+}
+
+.parent-ref {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.child-badge {
+  margin-left: 6px;
+  font-weight: 500;
 }
 
 .edit-btn.editing {

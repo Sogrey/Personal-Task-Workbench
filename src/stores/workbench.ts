@@ -408,11 +408,15 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     return { ok: true }
   }
 
-  /** BK-6：删除任务。历史留痕保留 taskTitle 快照，删除动作本身也写一条记录便于审计 */
+  /** BK-15：删除任务。有子任务时禁止（与 deleteProject 同口径）；删除动作写历史留痕（保留标题快照） */
   function deleteTask(taskId: string): { ok: boolean; reason?: string } {
     const idx = tasks.value.findIndex((t) => t.id === taskId)
     const removed = idx >= 0 ? tasks.value[idx] : undefined
     if (!removed) return { ok: false, reason: '任务不存在或已被删除' }
+    const children = tasks.value.filter((t) => t.parentId === taskId).length
+    if (children > 0) {
+      return { ok: false, reason: `${children} 个子任务关联该任务，请先删除子任务或在编辑中解除关联` }
+    }
     tasks.value.splice(idx, 1)
     history.value.unshift({
       id: `h-${Date.now()}`,
@@ -425,6 +429,18 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       reason: '工作台删除任务',
     })
     return { ok: true }
+  }
+
+  /** BK-15：某任务的直接子任务（含已取消，父子关系不随状态消失；两级层级下即全部后代） */
+  function childTasks(taskId: string) {
+    return tasks.value.filter((t) => t.parentId === taskId)
+  }
+
+  /** BK-15：父任务（无父级）的子任务完成进度 { done, total }；无子任务返回 null */
+  function childProgress(taskId: string) {
+    const children = tasks.value.filter((t) => t.parentId === taskId)
+    if (!children.length) return null
+    return { done: children.filter((t) => t.status === 'done').length, total: children.length }
   }
 
   /** BK-6：删除项目。仍有任务引用时禁止（与 deleteTag 同口径），避免任务的项目关联悬空 */
@@ -642,6 +658,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     priority: '优先级',
     status: '状态',
     tagIds: '标签',
+    parentId: '父任务',
   }
 
   /** 编辑任务：逐字段比对，变化字段写入历史（含标签增删），时间/项目/标签显示为可读文本 */
@@ -667,6 +684,8 @@ export const useWorkbenchStore = defineStore('workbench', () => {
         endAt: (v) => (v ? formatDateTimeReadable(v as string) : '—'),
         deadline: (v) => (v ? formatDateTimeReadable(v as string) : '—'),
         projectId: (v) => projectById(v as string)?.name ?? '未关联',
+        parentId: (v) =>
+          v ? (tasks.value.find((t) => t.id === (v as string))?.title ?? (v as string)) : '无',
         tagIds: (v) =>
           (v as string[]).length
             ? (v as string[]).map((id) => tagById(id)?.name ?? id).join('、')
@@ -710,6 +729,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       updatedAt: now,
     }
     tasks.value.unshift(task)
+    const parent = payload.parentId ? tasks.value.find((t) => t.id === payload.parentId) : undefined
     history.value.unshift({
       id: `h-${Date.now()}`,
       time: formatNow(),
@@ -717,7 +737,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       taskTitle: task.title,
       field: '新建任务',
       oldValue: '—',
-      newValue: task.title,
+      newValue: parent ? `${task.title}（子任务，父任务：${parent.title}）` : task.title,
       reason: '工作台录入',
     })
     return task
@@ -849,6 +869,8 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     deleteTag,
     deleteTask,
     deleteProject,
+    childTasks,
+    childProgress,
     setSelectedDate,
     shiftWeek,
     goTodayWeek,

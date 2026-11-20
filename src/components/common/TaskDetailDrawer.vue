@@ -6,7 +6,7 @@ import { overdueDays } from '@/utils/date'
 import { statusBadgeClass, TASK_STATUS_OPTIONS } from '@/utils/status'
 
 const props = defineProps<{ task: Task | null }>()
-const emit = defineEmits<{ close: []; edit: [task: Task]; delete: [task: Task] }>()
+const emit = defineEmits<{ close: []; edit: [task: Task]; delete: [task: Task]; goto: [task: Task] }>()
 
 const store = useWorkbenchStore()
 
@@ -14,6 +14,19 @@ const store = useWorkbenchStore()
 const latestNote = computed(() => {
   return props.task ? store.latestProgressNote(props.task.id) : undefined
 })
+
+/** BK-15：父任务（独立任务无） */
+const parentTask = computed(() => {
+  const pid = props.task?.parentId
+  return pid ? (store.tasks.find((t) => t.id === pid) ?? undefined) : undefined
+})
+
+/** BK-15：子任务清单（含已取消，按开始时间排序） */
+const children = computed(() => {
+  if (!props.task) return []
+  return [...store.childTasks(props.task.id)].sort((a, b) => a.startAt.localeCompare(b.startAt))
+})
+const childDoneCount = computed(() => children.value.filter((t) => t.status === 'done').length)
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
@@ -68,6 +81,19 @@ function fmtFull(iso?: string) {
                     {{ store.projectById(task.projectId)?.name }}
                   </RouterLink>
                   <template v-else>未关联</template>
+                </span>
+              </div>
+              <div v-if="parentTask" class="row">
+                <span class="k">父任务</span>
+                <span class="v">
+                  <button
+                    class="text-link"
+                    type="button"
+                    :title="`查看「${parentTask.title}」详情`"
+                    @click="emit('goto', parentTask)"
+                  >
+                    {{ parentTask.title }}
+                  </button>
                 </span>
               </div>
               <div class="row">
@@ -125,6 +151,24 @@ function fmtFull(iso?: string) {
               <div v-if="task.completedAt" class="row">
                 <span class="k">实际完成</span>
                 <span class="v done-text">{{ fmtFull(task.completedAt) }}</span>
+              </div>
+            </section>
+
+            <!-- BK-15：子任务清单（父任务展示） -->
+            <section v-if="children.length" class="group">
+              <h4>子任务（{{ childDoneCount }}/{{ children.length }} 已完成）</h4>
+              <div class="child-list">
+                <button
+                  v-for="c in children"
+                  :key="c.id"
+                  class="child-item"
+                  type="button"
+                  :title="`查看「${c.title}」详情`"
+                  @click="emit('goto', c)"
+                >
+                  <span :class="statusBadgeClass(c.status)">{{ statusLabel(c.status) }}</span>
+                  <span class="child-name">{{ c.title }}</span>
+                </button>
               </div>
             </section>
 
@@ -353,6 +397,39 @@ function fmtFull(iso?: string) {
 
 .delete-action {
   color: var(--danger);
+}
+
+/* BK-15：父任务链接与子任务清单 */
+.child-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.child-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+}
+
+.child-item:hover {
+  border-color: var(--primary);
+  background: #fff;
+}
+
+.child-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .drawer-enter-active,
