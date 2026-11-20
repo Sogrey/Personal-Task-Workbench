@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { statusLabel, useWorkbenchStore } from '@/stores/workbench'
 import type { Task } from '@/types'
 import { CONFLICT_COLOR, STATUS_COLORS, statusBadgeClass } from '@/utils/status'
-import { formatRangeSmart, toLocalDateKey } from '@/utils/date'
+import { displayRange, formatRangeSmart, toLocalDateKey } from '@/utils/date'
 
 const store = useWorkbenchStore()
 const router = useRouter()
@@ -132,11 +132,16 @@ const rows = computed<GanttRow[]>(() => {
   const end = addDays(start, windowDays.value)
   return store.tasks
     .filter((t) => t.status !== 'cancelled')
-    .filter((t) => +new Date(t.startAt) < +end && +new Date(t.endAt) > +start)
-    .sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
+    .filter((t) => {
+      // BK-20：窗口判定/排序/条定位均按真实执行时间（提前开始/提前完成）
+      const r = displayRange(t)
+      return +new Date(r.start) < +end && +new Date(r.end) > +start
+    })
+    .sort((a, b) => +new Date(displayRange(a).start) - +new Date(displayRange(b).start))
     .map((task) => {
-      const s = +new Date(task.startAt)
-      const e = +new Date(task.endAt)
+      const r = displayRange(task)
+      const s = +new Date(r.start)
+      const e = +new Date(r.end)
       const clampedStart = Math.max(s, +start)
       const clampedEnd = Math.min(e, +end)
       return {
@@ -209,9 +214,16 @@ const workBands = computed(() =>
   }),
 )
 
-/** 任务时间文本：同日仅时刻，跨天带 M/D（与周视图/时间线同口径） */
+/** 任务时间文本：同日仅时刻，跨天带 M/D（与周视图/时间线同口径）；
+ *  BK-20：进行中/已完成显示真实执行时间 */
+function timeRangeOf(task: Task) {
+  const r = displayRange(task)
+  return [r.start, r.end] as const
+}
+
 function timeText(row: GanttRow) {
-  return formatRangeSmart(row.task.startAt, row.task.endAt)
+  const r = displayRange(row.task)
+  return formatRangeSmart(r.start, r.end)
 }
 /** FIX-7：条内文案 = 任务名 · 时间段（任务名在前，条窄时尾部时间截断，悬浮卡有全量） */
 function barText(row: GanttRow) {
@@ -413,7 +425,7 @@ onBeforeUnmount(() => window.clearTimeout(hoverTimer))
       </div>
       <div class="hc-row">
         <span>时间</span>
-        <span>{{ formatRangeSmart(hoverCard.task.startAt, hoverCard.task.endAt) }}</span>
+        <span>{{ formatRangeSmart(...timeRangeOf(hoverCard.task)) }}</span>
       </div>
       <div class="hc-row">
         <span>负责人</span>

@@ -22,6 +22,16 @@ export function formatRangeSmart(startAt: string, endAt: string) {
   return `${mdhm(s)} – ${mdhm(e)}`
 }
 
+/** BK-20：图表展示时段——进行中/已完成任务用真实执行时间渲染：
+ *  开始 = 实际开始（提前开始时早于计划），已完成结束 = 实际完成（提前完成时早于计划）；
+ *  其余状态回落计划时段 */
+export function displayRange(task: Pick<Task, 'startAt' | 'endAt' | 'actualStart' | 'completedAt' | 'status'>) {
+  const started = task.status === 'in_progress' || task.status === 'done'
+  const start = started && task.actualStart ? task.actualStart : task.startAt
+  const end = task.status === 'done' && task.completedAt ? task.completedAt : task.endAt
+  return { start, end }
+}
+
 /** FIX-6：逾期天数（相对基准日，今天）。已完成/已取消/延期处理（含旧数据仅打 delayed 标）恒为 0，
  *  由视图按 >0 自动叠加「逾期 N 天」徽章；随时间自然恢复，不写库不留痕 */
 export function overdueDays(task: Task, todayStr: string) {

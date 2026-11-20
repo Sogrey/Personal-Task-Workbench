@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { statusLabel, useWorkbenchStore } from '@/stores/workbench'
 import type { Task } from '@/types'
 import { CONFLICT_COLOR, STATUS_COLORS, statusBadgeClass } from '@/utils/status'
-import { formatRangeSmart, overdueDays, toLocalDateKey } from '@/utils/date'
+import { displayRange, formatRangeSmart, overdueDays, toLocalDateKey } from '@/utils/date'
 
 const store = useWorkbenchStore()
 
@@ -29,6 +29,12 @@ function blockColors(task: Task, conflict: boolean) {
   const color = conflict ? CONFLICT_COLOR : (STATUS_COLORS[task.status] ?? STATUS_COLORS.pending)
   const bg = done ? 'rgba(148, 163, 184, 0.16)' : conflict ? 'rgba(245,158,11,0.14)' : `${color}22`
   return { color, background: bg }
+}
+
+/** BK-20：展示时段（悬浮卡/重叠面板模板展开用）——进行中/已完成按真实执行时间 */
+function timeRangeOf(task: Task) {
+  const r = displayRange(task)
+  return [r.start, r.end] as const
 }
 
 /** 布局后的色块：同一天时间重叠的任务阶梯层叠（左错右齐），上层块置顶可读；
@@ -67,7 +73,8 @@ const STACK_STEP_PX = 12
 
 function layoutDay(tasks: Task[], day: Date): LaidBlock[] {
   const dayStr = dayKey(day)
-  const sorted = [...tasks].sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
+  // BK-20：排序/簇/列位全部按真实执行时间（提前开始/提前完成）
+  const sorted = [...tasks].sort((a, b) => +new Date(displayRange(a).start) - +new Date(displayRange(b).start))
   const result: LaidBlock[] = []
   // BK-19：已完成任务（含提前完成）不参与重叠簇——不叠块、不计「+N」、不进「时间重叠」面板；
   // 与冲突口径一致（已完成不再算时间重叠），平铺底层灰显供对照
@@ -77,10 +84,11 @@ function layoutDay(tasks: Task[], day: Date): LaidBlock[] {
   let cluster: Task[] = []
   let clusterEnd = 0
 
-  /** 任务在当日时间轴内的起止分钟（FIX-4：跨天任务 clamp 到当天轴内） */
+  /** 任务在当日时间轴内的起止分钟（FIX-4：跨天任务 clamp 到当天轴内；BK-20：按真实执行时间） */
   function effectiveRange(task: Task) {
-    const start = new Date(task.startAt)
-    const end = new Date(task.endAt)
+    const dr = displayRange(task)
+    const start = new Date(dr.start)
+    const end = new Date(dr.end)
     const dayStart = new Date(day)
     dayStart.setHours(HOUR_START, 0, 0, 0)
     const dayEnd = new Date(day)
@@ -141,8 +149,8 @@ function layoutDay(tasks: Task[], day: Date): LaidBlock[] {
       const colEnds: number[] = []
       const colOf = new Map<string, number>()
       for (const task of cluster) {
-        const s = +new Date(task.startAt)
-        const e = +new Date(task.endAt)
+        const s = +new Date(displayRange(task).start)
+        const e = +new Date(displayRange(task).end)
         let idx = colEnds.findIndex((end) => end <= s)
         if (idx < 0) {
           idx = colEnds.length
@@ -168,8 +176,8 @@ function layoutDay(tasks: Task[], day: Date): LaidBlock[] {
   }
 
   for (const task of activeSorted) {
-    const s = +new Date(task.startAt)
-    const e = +new Date(task.endAt)
+    const s = +new Date(displayRange(task).start)
+    const e = +new Date(displayRange(task).end)
     if (cluster.length && s >= clusterEnd) flush()
     cluster.push(task)
     clusterEnd = Math.max(clusterEnd, e)
@@ -181,10 +189,11 @@ const laidByDay = computed(() => {
   const map = new Map<string, LaidBlock[]>()
   for (const day of store.weekDays) {
     const key = dayKey(day)
-    // FIX-4：按「覆盖日期」归列——开始日 ≤ 当日 ≤ 结束日，跨天任务逐日延续显示
-    const dayTasks = store.weekTasks.filter(
-      (t) => t.startAt.slice(0, 10) <= key && t.endAt.slice(0, 10) >= key,
-    )
+    // FIX-4：按「覆盖日期」归列——开始日 ≤ 当日 ≤ 结束日，跨天任务逐日延续显示；BK-20：按真实执行时间归列
+    const dayTasks = store.weekTasks.filter((t) => {
+      const dr = displayRange(t)
+      return dr.start.slice(0, 10) <= key && dr.end.slice(0, 10) >= key
+    })
     map.set(key, layoutDay(dayTasks, day))
   }
   return map
@@ -246,7 +255,7 @@ function onBlockClick(e: MouseEvent, block: LaidBlock) {
     openTaskDetail(block.task)
     return
   }
-  const tasks = [...block.cluster].sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
+  const tasks = [...block.cluster].sort((a, b) => +new Date(displayRange(a).start) - +new Date(displayRange(b).start))
   const panelH = Math.min(120 + tasks.length * 64, 420)
   clickPanel.value = {
     tasks,
@@ -367,7 +376,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="hc-row">
         <span>时间</span>
-        <span>{{ formatRangeSmart(hoverCard.block.task.startAt, hoverCard.block.task.endAt) }}</span>
+        <span>{{ formatRangeSmart(...timeRangeOf(hoverCard.block.task)) }}</span>
       </div>
       <div class="hc-row">
         <span>负责人</span>
@@ -406,7 +415,7 @@ onBeforeUnmount(() => {
             <span :class="statusBadgeClass(task.status)">{{ statusLabel(task.status) }}</span>
           </div>
           <div class="cp-meta">
-            {{ formatRangeSmart(task.startAt, task.endAt) }} · {{ task.owner }}
+            {{ formatRangeSmart(...timeRangeOf(task)) }} · {{ task.owner }}
             <template v-if="task.contact"> · 对接：{{ task.contact }}</template>
             · {{ store.projectById(task.projectId)?.name ?? '未关联' }}
           </div>

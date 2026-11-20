@@ -30,6 +30,8 @@ export interface Task {
   startAt: string
   endAt: string
   deadline?: string
+  /** BK-20：实际开始时间（首次/重新切入「进行中」时自动记录，含提前开始） */
+  actualStart?: string
   priority: TaskPriority
   status: TaskStatus
   tagIds: string[]

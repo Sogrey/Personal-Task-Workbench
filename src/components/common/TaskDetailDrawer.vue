@@ -129,7 +129,7 @@ function fmtFull(iso?: string) {
             <section class="group">
               <h4>时间安排</h4>
               <div class="row">
-                <span class="k">时间段</span>
+                <span class="k">计划时段</span>
                 <span class="v">{{ formatTimeRange(task.startAt, task.endAt) }}（跨天任务见下方具体时刻）</span>
               </div>
               <div class="row">
@@ -143,6 +143,11 @@ function fmtFull(iso?: string) {
               <div class="row">
                 <span class="k">截止</span>
                 <span class="v">{{ fmtFull(task.deadline) }}</span>
+              </div>
+              <!-- BK-20：真实执行时间——切「进行中」自动记实际开始（含提前开始） -->
+              <div v-if="task.actualStart" class="row">
+                <span class="k">实际开始</span>
+                <span class="v">{{ fmtFull(task.actualStart) }}</span>
               </div>
               <!-- FIX-6：逾期派生提示（不写库），已完成/已取消/延期处理不显示 -->
               <div v-if="overdueDays(task, store.today) > 0" class="warn-tip danger-tip">

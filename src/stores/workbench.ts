@@ -509,7 +509,11 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     if (!task || task.status === status) return
     const old = task.status
     task.status = status
-    task.updatedAt = new Date().toISOString()
+    task.updatedAt = toLocalIsoNow()
+    // BK-20：切入「进行中」自动记录实际开始时间（提前开始/重开都取此刻）；完成记实际完成时间
+    if (status === 'in_progress') {
+      task.actualStart = toLocalIsoNow()
+    }
     // FIX-6 状态清理口径：完成写实际完成时间并清延期标识（与 completeTask 一致）；
     // 离开 done 清完成时间（归因由 closedLoop 重新确认）；
     // 转「延期处理」同步打延期标识，转其他状态视为恢复正常、清延期标识（留痕在 history 可审计）
@@ -560,7 +564,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     task.completedAt = normalized
     task.delayed = false
     task.delayNote = undefined
-    task.updatedAt = new Date().toISOString()
+    task.updatedAt = toLocalIsoNow()
     history.value.unshift({
       id: `h-${Date.now()}`,
       time: formatNow(),
@@ -581,7 +585,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     task.status = 'in_progress'
     task.delayed = false
     task.delayNote = undefined
-    task.updatedAt = new Date().toISOString()
+    task.updatedAt = toLocalIsoNow()
     history.value.unshift({
       id: `h-${Date.now()}`,
       time: formatNow(),
@@ -603,7 +607,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     task.status = 'delayed'
     task.delayed = true
     task.delayNote = note?.trim() || undefined
-    task.updatedAt = new Date().toISOString()
+    task.updatedAt = toLocalIsoNow()
     history.value.unshift({
       id: `h-${Date.now()}`,
       time: formatNow(),
@@ -623,7 +627,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     if (!text) return
     const task = tasks.value.find((t) => t.id === taskId)
     if (!task) return
-    task.updatedAt = new Date().toISOString()
+    task.updatedAt = toLocalIsoNow()
     history.value.unshift({
       id: `h-${Date.now()}`,
       time: formatNow(),
@@ -657,7 +661,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       task.status = 'pending'
       task.delayed = false
       task.delayNote = undefined
-      task.updatedAt = new Date().toISOString()
+      task.updatedAt = toLocalIsoNow()
       history.value.unshift({
         id: `h-${Date.now()}`,
         time: formatNow(),
@@ -741,7 +745,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     if (!changed) return
     const oldStatus = task.status
     Object.assign(task, patch)
-    task.updatedAt = new Date().toISOString()
+    task.updatedAt = toLocalIsoNow()
     // FIX-6：编辑表单变更状态时同步延期标识（与 updateTaskStatus 同口径，避免 status 与 delayed 脱节）
     if (patch.status && patch.status !== oldStatus) {
       if (patch.status === 'delayed') task.delayed = true
@@ -754,7 +758,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
   }
 
   function addTask(payload: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>) {
-    const now = new Date().toISOString()
+    const now = toLocalIsoNow()
     const task: Task = {
       ...payload,
       id: `task-${Date.now()}`,
