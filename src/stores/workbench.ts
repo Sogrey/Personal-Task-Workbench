@@ -431,12 +431,27 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     return { ok: true }
   }
 
-  /** BK-15：某任务的直接子任务（含已取消，父子关系不随状态消失；两级层级下即全部后代） */
+  /** BK-15：某任务的直接子任务（含已取消，父子关系不随状态消失） */
   function childTasks(taskId: string) {
     return tasks.value.filter((t) => t.parentId === taskId)
   }
 
-  /** BK-15：父任务（无父级）的子任务完成进度 { done, total }；无子任务返回 null */
+  /** BK-16：全部后代 id 集（多级拆分；含环防御，脏数据成环时不死循环） */
+  function descendantIds(taskId: string) {
+    const out = new Set<string>()
+    const walk = (pid: string) => {
+      for (const t of tasks.value) {
+        if (t.parentId === pid && !out.has(t.id)) {
+          out.add(t.id)
+          walk(t.id)
+        }
+      }
+    }
+    walk(taskId)
+    return out
+  }
+
+  /** BK-15：父任务的子任务完成进度 { done, total }（直接子任务）；无子任务返回 null */
   function childProgress(taskId: string) {
     const children = tasks.value.filter((t) => t.parentId === taskId)
     if (!children.length) return null
@@ -870,6 +885,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     deleteTask,
     deleteProject,
     childTasks,
+    descendantIds,
     childProgress,
     setSelectedDate,
     shiftWeek,

@@ -67,29 +67,51 @@ function matchesFilter(t: Task, q: string) {
   return [t.title, t.owner, t.contact ?? '', t.description ?? '', project, tagText].join(' ').toLowerCase().includes(q)
 }
 
-/** BK-15：筛选结果保持父子相邻——子任务紧跟其父任务输出；父任务被筛掉时子任务按原顺序独立显示 */
+/** 任务的祖先 id 链（自父向上，含环防御） */
+function ancestorIds(task: Task): string[] {
+  const out: string[] = []
+  const seen = new Set<string>([task.id])
+  let cur = task.parentId
+  while (cur && !seen.has(cur)) {
+    seen.add(cur)
+    out.push(cur)
+    const parent = store.tasks.find((t) => t.id === cur)
+    if (!parent) break
+    cur = parent.parentId
+  }
+  return out
+}
+
+/** 任务的层级深度（顶层=0，用于列表缩进） */
+function depthOf(task: Task): number {
+  return ancestorIds(task).length
+}
+
+/** BK-16：筛选结果按深度优先保持父前子后（任意层级）；祖先全被筛掉时子树根按原顺序独立显示 */
 const filtered = computed(() => {
   const q = keyword.value.trim().toLowerCase()
   const matched = store.tasks.filter((t) => matchesFilter(t, q))
   const matchedIds = new Set(matched.map((t) => t.id))
+  const childrenOf = new Map<string, Task[]>()
+  for (const t of matched) {
+    if (!t.parentId) continue
+    const arr = childrenOf.get(t.parentId)
+    if (arr) arr.push(t)
+    else childrenOf.set(t.parentId, [t])
+  }
   const out: Task[] = []
   const emitted = new Set<string>()
-  for (const t of matched) {
-    if (emitted.has(t.id)) continue
-    if (t.parentId) {
-      const parentVisible = matchedIds.has(t.parentId) && !emitted.has(t.parentId)
-      if (parentVisible) continue // 父任务稍后出现时统一带出，保持父前子后
-    }
+  const emit = (t: Task) => {
+    if (emitted.has(t.id)) return
     out.push(t)
     emitted.add(t.id)
-    if (!t.parentId) {
-      for (const c of store.tasks) {
-        if (c.parentId === t.id && matchedIds.has(c.id) && !emitted.has(c.id)) {
-          out.push(c)
-          emitted.add(c.id)
-        }
-      }
-    }
+    for (const c of childrenOf.get(t.id) ?? []) emit(c)
+  }
+  for (const t of matched) {
+    if (emitted.has(t.id)) continue
+    // 祖先（匹配且未输出）稍后会带出本任务，跳过保持父前子后
+    if (t.parentId && ancestorIds(t).some((id) => matchedIds.has(id) && !emitted.has(id))) continue
+    emit(t)
   }
   return out
 })
@@ -97,9 +119,9 @@ const filtered = computed(() => {
 /* ───── BK-15：父子层级展示 ───── */
 /** 折叠的父任务 id 集（默认全展开） */
 const collapsedIds = ref<Set<string>>(new Set())
-/** 可见行：被折叠父任务的子任务不渲染、不参与勾选与全选 */
+/** 可见行：任一祖先被折叠的后代全部隐藏，不渲染、不参与勾选与全选 */
 const visibleTasks = computed(() =>
-  filtered.value.filter((t) => !t.parentId || !collapsedIds.value.has(t.parentId)),
+  filtered.value.filter((t) => !ancestorIds(t).some((id) => collapsedIds.value.has(id))),
 )
 
 function toggleCollapse(taskId: string) {
@@ -109,12 +131,12 @@ function toggleCollapse(taskId: string) {
   collapsedIds.value = next
 }
 
-/** 可选父任务池：无父级的任务（保证两级层级），排除编辑中的自身 */
-const parentCandidates = computed(() => store.tasks.filter((t) => !t.parentId && t.id !== editingId.value))
-/** 编辑中的任务已有子任务时不能再挂父级（避免三层） */
-const editingHasChildren = computed(() => {
-  if (!editingId.value) return false
-  return store.tasks.some((t) => t.parentId === editingId.value)
+/** 可选父任务池（BK-16：任意任务可作父级）：排除编辑中的自身与其全部后代，避免成环 */
+const parentCandidates = computed(() => {
+  if (!editingId.value) return [...store.tasks]
+  const banned = store.descendantIds(editingId.value)
+  banned.add(editingId.value)
+  return store.tasks.filter((t) => !banned.has(t.id))
 })
 
 /** 行内「拆分」：为该任务快速创建子任务（预填父级） */
@@ -326,9 +348,9 @@ function submit() {
   if (!form.title.trim()) return
   // FIX-3 硬校验：结束不早于开始，否则拦截保存
   if (endBeforeStart.value) return
-  // BK-15 两级层级防御：有子任务的任务不能再挂父级，父级不能是自己（正常操作下由下拉禁用保证）
+  // BK-16 环防御：父级不能是编辑任务自身或其后代（候选池已排除，此处兜底拦截）
   if (form.parentId && form.parentId === editingId.value) return
-  if (form.parentId && editingId.value && store.tasks.some((t) => t.parentId === editingId.value)) return
+  if (form.parentId && editingId.value && store.descendantIds(editingId.value).has(form.parentId)) return
   const payload = {
     title: form.title.trim(),
     projectId: form.projectId || undefined,
@@ -436,7 +458,7 @@ function submit() {
         </div>
         <div class="field">
           <label>父任务（可选，拆分为子任务）</label>
-          <select v-model="form.parentId" :disabled="editingHasChildren">
+          <select v-model="form.parentId">
             <option value="">无（独立任务）</option>
             <option v-for="p in parentCandidates" :key="p.id" :value="p.id">{{ p.title }}</option>
           </select>
@@ -490,7 +512,6 @@ function submit() {
           <p class="muted">「开始/结束」= 计划执行时段（占哪天的哪几个小时，驱动日历色块与时间投入）；「截止」= 完成期限（最晚交付时间，驱动逾期与临期提醒），可与执行时段无关。</p>
           <p v-if="endBeforeStart" class="hard-warn">⚠ 结束时间需不早于开始时间，请修正后再保存</p>
           <p v-else-if="deadlineBeforeStart" class="soft-warn">⚠ 截止早于开始时间，请确认是否正确（仍可保存）</p>
-          <p v-if="editingHasChildren" class="hard-warn">⚠ 该任务已有子任务，不能再挂到其他任务下（保持两级层级）</p>
         </div>
       </div>
       <div class="tag-pick">
@@ -560,13 +581,14 @@ function submit() {
                 <div
                   class="title tappable"
                   :class="{ 'child-title': !!task.parentId }"
+                  :style="task.parentId ? { paddingLeft: `${depthOf(task) * 16 + 2}px` } : undefined"
                   role="link"
                   tabindex="0"
                   @click="onView(task)"
                   @keydown.enter="onView(task)"
                 >
                   <button
-                    v-if="!task.parentId && store.childProgress(task.id)"
+                    v-if="store.childProgress(task.id)"
                     class="collapse-btn"
                     type="button"
                     :title="collapsedIds.has(task.id) ? '展开子任务' : '折叠子任务'"
@@ -617,7 +639,7 @@ function submit() {
               <td>
                 <span :class="statusBadgeClass(task.status)">{{ statusLabel(task.status) }}</span>
                 <span
-                  v-if="!task.parentId && store.childProgress(task.id)"
+                  v-if="store.childProgress(task.id)"
                   class="badge badge-info child-badge"
                   :title="`子任务 ${store.childProgress(task.id)!.done}/${store.childProgress(task.id)!.total} 已完成`"
                 >
@@ -632,7 +654,7 @@ function submit() {
               </td>
               <td>
                 <div class="row-actions">
-                  <button v-if="!task.parentId" class="btn btn-ghost split-btn" type="button" title="拆分为子任务" @click="openCreateChild(task)">
+                  <button class="btn btn-ghost split-btn" type="button" title="拆分为子任务" @click="openCreateChild(task)">
                     拆分
                   </button>
                   <button class="btn btn-ghost view-btn" type="button" @click="onView(task)">查看</button>
@@ -904,7 +926,7 @@ function submit() {
 }
 
 .child-title {
-  padding-left: 18px;
+  /* 缩进由模板按层级深度 inline 计算（depthOf × 16px），这里只保留语义标记 */
 }
 
 .child-mark {
