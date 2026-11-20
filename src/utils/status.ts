@@ -1,5 +1,19 @@
 import type { TaskStatus } from '@/types'
 
+/** BK-7：状态选项唯一来源（筛选/批量/表单/行内/抽屉统一引用，避免各处手写遗漏） */
+export const TASK_STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
+  { value: 'pending', label: '待处理' },
+  { value: 'in_progress', label: '进行中' },
+  { value: 'to_confirm', label: '待确认' },
+  { value: 'delayed', label: '延期处理' },
+  { value: 'done', label: '已完成' },
+  { value: 'cancelled', label: '已取消' },
+]
+
+export function statusLabel(status: TaskStatus) {
+  return TASK_STATUS_OPTIONS.find((opt) => opt.value === status)?.label ?? status
+}
+
 export function statusBadgeClass(status: TaskStatus) {
   switch (status) {
     case 'in_progress':

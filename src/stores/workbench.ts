@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { DEFAULT_TAGS } from '@/data/defaults'
 import type { HistoryRecord, Project, ProjectStatus, ReminderItem, StatCard, Tag, Task, TaskStatus } from '@/types'
 import { toLocalDateKey } from '@/utils/date'
+import { statusLabel } from '@/utils/status'
 
 const STORAGE_KEY = 'workbench-data-v1'
 
@@ -32,18 +33,36 @@ const DEFAULT_PREFS: WorkbenchPrefs = {
 
 const PREFS_KEY = 'workbench-prefs-v1'
 
+const BACKUP_APP = 'personal-task-workbench'
+const BACKUP_VERSION = 1
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+/** 偏好归一：字段缺失或类型不符时回落默认值（本地加载与导入备份共用） */
+function normalizePrefs(raw: unknown): WorkbenchPrefs {
+  const parsed = isRecord(raw) ? raw : {}
+  return {
+    displayName:
+      typeof parsed.displayName === 'string' && parsed.displayName ? parsed.displayName : DEFAULT_PREFS.displayName,
+    ownerName:
+      typeof parsed.ownerName === 'string' && parsed.ownerName ? parsed.ownerName : DEFAULT_PREFS.ownerName,
+    workStart:
+      typeof parsed.workStart === 'string' && parsed.workStart ? parsed.workStart : DEFAULT_PREFS.workStart,
+    workEnd: typeof parsed.workEnd === 'string' && parsed.workEnd ? parsed.workEnd : DEFAULT_PREFS.workEnd,
+    dueSoonHours:
+      typeof parsed.dueSoonHours === 'number' && parsed.dueSoonHours > 0
+        ? parsed.dueSoonHours
+        : DEFAULT_PREFS.dueSoonHours,
+  }
+}
+
 function loadPrefs(): WorkbenchPrefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY)
     if (!raw) return { ...DEFAULT_PREFS }
-    const parsed = JSON.parse(raw) as Partial<WorkbenchPrefs>
-    return {
-      displayName: typeof parsed.displayName === 'string' && parsed.displayName ? parsed.displayName : DEFAULT_PREFS.displayName,
-      ownerName: typeof parsed.ownerName === 'string' && parsed.ownerName ? parsed.ownerName : DEFAULT_PREFS.ownerName,
-      workStart: typeof parsed.workStart === 'string' && parsed.workStart ? parsed.workStart : DEFAULT_PREFS.workStart,
-      workEnd: typeof parsed.workEnd === 'string' && parsed.workEnd ? parsed.workEnd : DEFAULT_PREFS.workEnd,
-      dueSoonHours: typeof parsed.dueSoonHours === 'number' && parsed.dueSoonHours > 0 ? parsed.dueSoonHours : DEFAULT_PREFS.dueSoonHours,
-    }
+    return normalizePrefs(JSON.parse(raw))
   } catch {
     return { ...DEFAULT_PREFS }
   }
@@ -389,6 +408,37 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     return { ok: true }
   }
 
+  /** BK-6：删除任务。历史留痕保留 taskTitle 快照，删除动作本身也写一条记录便于审计 */
+  function deleteTask(taskId: string): { ok: boolean; reason?: string } {
+    const idx = tasks.value.findIndex((t) => t.id === taskId)
+    const removed = idx >= 0 ? tasks.value[idx] : undefined
+    if (!removed) return { ok: false, reason: '任务不存在或已被删除' }
+    tasks.value.splice(idx, 1)
+    history.value.unshift({
+      id: `h-${Date.now()}`,
+      time: formatNow(),
+      taskId: removed.id,
+      taskTitle: removed.title,
+      field: '删除任务',
+      oldValue: removed.title,
+      newValue: '已删除',
+      reason: '工作台删除任务',
+    })
+    return { ok: true }
+  }
+
+  /** BK-6：删除项目。仍有任务引用时禁止（与 deleteTag 同口径），避免任务的项目关联悬空 */
+  function deleteProject(projectId: string): { ok: boolean; reason?: string } {
+    const used = tasks.value.filter((t) => t.projectId === projectId).length
+    if (used > 0) {
+      return { ok: false, reason: `${used} 个任务关联该项目，请先移除任务的项目关联或删除任务` }
+    }
+    const idx = projects.value.findIndex((p) => p.id === projectId)
+    if (idx < 0) return { ok: false, reason: '项目不存在或已被删除' }
+    projects.value.splice(idx, 1)
+    return { ok: true }
+  }
+
   function setSelectedDate(isoDate: string) {
     selectedDate.value = isoDate.slice(0, 10)
   }
@@ -684,6 +734,64 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     return project
   }
 
+  /** BK-8：导出完整本地数据（任务/项目/标签/历史/偏好）为 JSON 文本 */
+  function exportData(): string {
+    return JSON.stringify(
+      {
+        app: BACKUP_APP,
+        version: BACKUP_VERSION,
+        exportedAt: toLocalIsoNow(),
+        data: {
+          tasks: tasks.value,
+          projects: projects.value,
+          tags: tags.value,
+          history: history.value,
+          prefs: prefs.value,
+        },
+      },
+      null,
+      2,
+    )
+  }
+
+  /** BK-8：导入备份（覆盖当前数据）。校验顶层结构与任务必要字段，其余字段由既有默认值兜底 */
+  function importData(raw: string): { ok: boolean; reason?: string } {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return { ok: false, reason: '文件不是有效的 JSON' }
+    }
+    if (!isRecord(parsed)) return { ok: false, reason: '备份文件格式不正确' }
+    // 兼容 { app, version, data } 包装格式与直接导出的数据对象
+    const data = isRecord(parsed.data) ? parsed.data : parsed
+    const nextTasks = data.tasks
+    const nextProjects = data.projects
+    const nextTags = data.tags
+    const nextHistory = data.history
+    if (
+      !Array.isArray(nextTasks) ||
+      !Array.isArray(nextProjects) ||
+      !Array.isArray(nextTags) ||
+      !Array.isArray(nextHistory)
+    ) {
+      return { ok: false, reason: '备份文件缺少 tasks/projects/tags/history 数据' }
+    }
+    for (const item of nextTasks) {
+      if (!isRecord(item) || typeof item.id !== 'string' || typeof item.title !== 'string') {
+        return { ok: false, reason: '备份文件包含无效任务记录' }
+      }
+    }
+    tasks.value = nextTasks as Task[]
+    projects.value = nextProjects as Project[]
+    tags.value = nextTags.length ? (nextTags as Tag[]) : [...DEFAULT_TAGS]
+    history.value = nextHistory as HistoryRecord[]
+    if (data.prefs) savePrefs(normalizePrefs(data.prefs))
+    selectedDate.value = today.value
+    weekAnchor.value = today.value
+    return { ok: true }
+  }
+
   function resetLocalData() {
     tasks.value = []
     projects.value = []
@@ -739,6 +847,8 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     addTag,
     updateTag,
     deleteTag,
+    deleteTask,
+    deleteProject,
     setSelectedDate,
     shiftWeek,
     goTodayWeek,
@@ -746,6 +856,8 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     updateTask,
     addTask,
     addProject,
+    exportData,
+    importData,
     resetLocalData,
     tasksByProject,
     unfinishedByProject,
@@ -765,17 +877,7 @@ function formatNow() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-export function statusLabel(status: TaskStatus) {
-  const map: Record<TaskStatus, string> = {
-    pending: '待处理',
-    in_progress: '进行中',
-    to_confirm: '待确认',
-    delayed: '延期处理',
-    done: '已完成',
-    cancelled: '已取消',
-  }
-  return map[status]
-}
+export { statusLabel }
 
 export function priorityLabel(priority: Task['priority']) {
   const map = { low: '低', medium: '中', high: '高', urgent: '紧急' } as const

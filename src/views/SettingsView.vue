@@ -19,11 +19,59 @@ const dirty = computed(
 
 const invalidTime = computed(() => draft.workEnd <= draft.workStart)
 
+/* ───── BK-8：本地数据备份 ───── */
+const importInput = ref<HTMLInputElement | null>(null)
+const dataMsg = ref('')
+const dataMsgType = ref<'ok' | 'error'>('ok')
+
+function flashDataMsg(message: string, type: 'ok' | 'error' = 'ok') {
+  dataMsg.value = message
+  dataMsgType.value = type
+  window.setTimeout(() => (dataMsg.value = ''), 5000)
+}
+
+/** 导出 JSON 备份，文件名带本地时间戳 */
+function exportBackup() {
+  const blob = new Blob([store.exportData()], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `workbench-backup-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+  flashDataMsg(`已导出：任务 ${store.tasks.length} · 项目 ${store.projects.length} · 历史 ${store.history.length} 条`)
+}
+
+/** 导入 JSON 备份（覆盖当前数据，导入前二次确认） */
+async function onImportFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // 允许连续选择同一个文件
+  if (!file) return
+  if (
+    !window.confirm(
+      `将用「${file.name}」覆盖当前全部数据（任务/项目/标签/历史/偏好），该操作不可撤销。确定继续吗？`,
+    )
+  ) {
+    return
+  }
+  const text = await file.text()
+  const res = store.importData(text)
+  if (res.ok) {
+    flashDataMsg('导入成功，本地数据已替换')
+  } else {
+    flashDataMsg(res.reason ?? '导入失败', 'error')
+  }
+}
+
 function clearData() {
   if (!window.confirm('确定清空本地数据吗？将删除全部任务、项目与历史记录，并恢复默认标签，该操作不可撤销。')) {
     return
   }
   store.resetLocalData()
+  flashDataMsg('本地数据已清空，标签已恢复默认')
 }
 
 function save() {
@@ -106,10 +154,22 @@ function resetDefaults() {
       </div>
       <div class="data-row">
         <p class="note">
-          数据仅保存在本机浏览器，不上传任何服务器。清空后任务、项目与历史记录将被删除，并恢复默认标签。
+          数据仅保存在本机浏览器，不上传任何服务器。建议定期导出备份；导入会覆盖当前全部数据，清空后不可恢复。
         </p>
-        <button class="btn btn-danger" type="button" @click="clearData">清空本地数据</button>
+        <div class="data-actions">
+          <button class="btn" type="button" @click="exportBackup">导出备份</button>
+          <button class="btn" type="button" @click="importInput?.click()">导入备份</button>
+          <input
+            ref="importInput"
+            class="file-input"
+            type="file"
+            accept="application/json,.json"
+            @change="onImportFile"
+          />
+          <button class="btn btn-danger" type="button" @click="clearData">清空本地数据</button>
+        </div>
       </div>
+      <p v-if="dataMsg" class="data-msg" :class="dataMsgType">{{ dataMsg }}</p>
     </section>
   </div>
 </template>
@@ -186,6 +246,29 @@ function resetDefaults() {
   flex: 1;
   min-width: 240px;
   margin-top: 0;
+}
+
+.data-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.file-input {
+  display: none;
+}
+
+.data-msg {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+
+.data-msg.ok {
+  color: #16a34a;
+}
+
+.data-msg.error {
+  color: var(--danger);
 }
 
 .btn-danger {

@@ -10,7 +10,7 @@ import {
 } from '@/stores/workbench'
 import type { Task, TaskPriority, TaskStatus } from '@/types'
 import { overdueDays } from '@/utils/date'
-import { statusBadgeClass } from '@/utils/status'
+import { statusBadgeClass, TASK_STATUS_OPTIONS } from '@/utils/status'
 import TaskDetailDrawer from '@/components/common/TaskDetailDrawer.vue'
 
 const store = useWorkbenchStore()
@@ -53,7 +53,8 @@ const form = reactive({
 const filtered = computed(() => {
   const q = keyword.value.trim().toLowerCase()
   return store.tasks.filter((t) => {
-    if (t.status === 'cancelled') return false
+    // 已取消任务默认隐藏（避免列表噪音），仅在明确筛选「已取消」时展示
+    if (t.status === 'cancelled' && statusFilter.value !== 'cancelled') return false
     if (statusFilter.value !== 'all' && t.status !== statusFilter.value) return false
     if (priorityFilter.value !== 'all' && t.priority !== priorityFilter.value) return false
     if (projectFilter.value && t.projectId !== projectFilter.value) return false
@@ -160,6 +161,18 @@ function onDrawerEdit(task: Task) {
   drawerTask.value = null
   clearTaskQuery()
   startEdit(task)
+}
+
+/** BK-6：删除任务（历史留痕保留标题快照，可继续审计） */
+function removeTask(task: Task) {
+  if (!window.confirm(`确定删除任务「${task.title}」吗？删除后不可恢复，历史记录会保留。`)) return
+  const res = store.deleteTask(task.id)
+  if (!res.ok) {
+    window.alert(res.reason ?? '删除失败')
+    return
+  }
+  if (drawerTask.value?.id === task.id) closeDrawer()
+  if (editingId.value === task.id) cancelEdit()
 }
 
 onBeforeUnmount(() => window.clearTimeout(missingTimer))
@@ -278,11 +291,9 @@ function submit() {
         <input v-model="keyword" type="search" placeholder="筛选关键词" />
         <select v-model="statusFilter">
           <option value="all">全部状态</option>
-          <option value="pending">待处理</option>
-          <option value="in_progress">进行中</option>
-          <option value="to_confirm">待确认</option>
-          <option value="delayed">延期处理</option>
-          <option value="done">已完成</option>
+          <option v-for="opt in TASK_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
+            {{ opt.label }}
+          </option>
         </select>
         <select v-model="priorityFilter">
           <option value="all">全部优先级</option>
@@ -325,11 +336,9 @@ function submit() {
       <div class="batch-actions">
         <select v-model="batchStatus" class="batch-select" title="批量修改状态">
           <option value="">批量改状态…</option>
-          <option value="pending">待处理</option>
-          <option value="in_progress">进行中</option>
-          <option value="to_confirm">待确认</option>
-          <option value="delayed">延期处理</option>
-          <option value="done">已完成</option>
+          <option v-for="opt in TASK_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
+            {{ opt.label }}
+          </option>
         </select>
         <button class="btn" type="button" :disabled="!batchStatus" @click="applyBatchStatus">应用</button>
         <select v-model="batchProject" class="batch-select" title="批量修改项目">
@@ -388,10 +397,9 @@ function submit() {
         <div class="field">
           <label>状态</label>
           <select v-model="form.status">
-            <option value="pending">待处理</option>
-            <option value="in_progress">进行中</option>
-            <option value="to_confirm">待确认</option>
-            <option value="delayed">延期处理</option>
+            <option v-for="opt in TASK_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
           </select>
         </div>
         <div class="field span-all">
@@ -530,12 +538,13 @@ function submit() {
                     :value="task.status"
                     @change="store.updateTaskStatus(task.id, ($event.target as HTMLSelectElement).value as TaskStatus)"
                   >
-                    <option value="pending">待处理</option>
-                    <option value="in_progress">进行中</option>
-                    <option value="to_confirm">待确认</option>
-                    <option value="delayed">延期处理</option>
-                    <option value="done">已完成</option>
+                    <option v-for="opt in TASK_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
+                      {{ opt.label }}
+                    </option>
                   </select>
+                  <button class="btn btn-ghost delete-btn" type="button" @click="removeTask(task)">
+                    删除
+                  </button>
                 </div>
               </td>
             </tr>
@@ -549,7 +558,7 @@ function submit() {
 
     <div v-if="taskMissing" class="missing-hint card">未找到对应的任务，可能已被删除或数据未同步</div>
 
-    <TaskDetailDrawer :task="drawerTask" @close="closeDrawer" @edit="onDrawerEdit" />
+    <TaskDetailDrawer :task="drawerTask" @close="closeDrawer" @edit="onDrawerEdit" @delete="removeTask" />
   </div>
 </template>
 
@@ -748,6 +757,13 @@ function submit() {
   height: 32px;
   font-size: 12px;
   color: var(--primary);
+}
+
+.delete-btn {
+  padding: 0 8px;
+  height: 32px;
+  font-size: 12px;
+  color: var(--danger);
 }
 
 .edit-btn.editing {

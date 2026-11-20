@@ -3,10 +3,10 @@ import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { formatTimeRange, priorityLabel, statusLabel, useWorkbenchStore } from '@/stores/workbench'
 import type { Task } from '@/types'
 import { overdueDays } from '@/utils/date'
-import { statusBadgeClass } from '@/utils/status'
+import { statusBadgeClass, TASK_STATUS_OPTIONS } from '@/utils/status'
 
 const props = defineProps<{ task: Task | null }>()
-const emit = defineEmits<{ close: []; edit: [task: Task] }>()
+const emit = defineEmits<{ close: []; edit: [task: Task]; delete: [task: Task] }>()
 
 const store = useWorkbenchStore()
 
@@ -158,12 +158,13 @@ function fmtFull(iso?: string) {
               :value="task.status"
               @change="store.updateTaskStatus(task.id, ($event.target as HTMLSelectElement).value as Task['status'])"
             >
-              <option value="pending">待处理</option>
-              <option value="in_progress">进行中</option>
-              <option value="to_confirm">待确认</option>
-              <option value="delayed">延期处理</option>
-              <option value="done">已完成</option>
+              <option v-for="opt in TASK_STATUS_OPTIONS" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </option>
             </select>
+            <button class="btn btn-ghost delete-action" type="button" @click="emit('delete', task)">
+              删除任务
+            </button>
             <button class="btn btn-primary" type="button" @click="emit('edit', task)">编辑任务</button>
           </footer>
         </aside>
@@ -348,6 +349,10 @@ function fmtFull(iso?: string) {
 
 .foot .btn {
   height: 34px;
+}
+
+.delete-action {
+  color: var(--danger);
 }
 
 .drawer-enter-active,

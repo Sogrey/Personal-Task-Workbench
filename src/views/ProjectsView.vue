@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { useWorkbenchStore } from '@/stores/workbench'
+import type { Project } from '@/types'
 
 const store = useWorkbenchStore()
 
@@ -26,6 +27,13 @@ function statusBadge(status: string) {
 
 function statusText(status: string) {
   return status === 'archived' ? '已归档' : '进行中'
+}
+
+/** BK-6：删除项目；有任务关联时 store 会拒绝并返回原因 */
+function removeProject(project: Project) {
+  if (!window.confirm(`确定删除项目「${project.name}」吗？该操作不可撤销。`)) return
+  const res = store.deleteProject(project.id)
+  if (!res.ok) window.alert(res.reason ?? '删除失败')
 }
 </script>
 
@@ -97,9 +105,14 @@ function statusText(status: string) {
         <div class="bar">
           <i :style="{ width: `${store.projectProgress(project.id)}%` }" />
         </div>
-        <RouterLink class="link" :to="{ path: '/tasks', query: { projectId: project.id } }">
-          查看任务 →
-        </RouterLink>
+        <div class="foot">
+          <RouterLink class="link" :to="{ path: '/tasks', query: { projectId: project.id } }">
+            查看任务 →
+          </RouterLink>
+          <button class="btn btn-ghost project-delete" type="button" @click="removeProject(project)">
+            删除项目
+          </button>
+        </div>
       </article>
     </div>
 
@@ -227,6 +240,23 @@ function statusText(status: string) {
   color: var(--primary);
   font-size: 13px;
   font-weight: 600;
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.foot .link {
+  margin-top: 0;
+}
+
+.project-delete {
+  color: var(--danger);
+  font-size: 12px;
 }
 
 .empty-card {
