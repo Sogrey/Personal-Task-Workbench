@@ -139,10 +139,17 @@ const parentCandidates = computed(() => {
   return store.tasks.filter((t) => !banned.has(t.id))
 })
 
-/** 行内「拆分」：为该任务快速创建子任务（预填父级） */
+/** 行内「拆分」：为该任务快速创建子任务。
+ *  BK-18 默认值：项目/结束/截止继承父任务；开始时间取当前时刻（子任务从"现在"开始推进）。 */
 function openCreateChild(task: Task) {
   cancelEdit()
   form.parentId = task.id
+  form.projectId = task.projectId ?? ''
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  form.startAt = `${store.today}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  form.endAt = task.endAt.slice(0, 16)
+  form.deadline = (task.deadline ?? task.endAt).slice(0, 16)
   showForm.value = true
   nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
 }
