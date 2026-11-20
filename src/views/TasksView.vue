@@ -528,6 +528,8 @@ function submit() {
           type="button"
           class="chip"
           :class="{ on: form.tagIds.includes(tag.id) }"
+          :style="{ '--tag': tag.color }"
+          :title="`标签「${tag.name}」`"
           @click="toggleTag(tag.id)"
         >
           {{ tag.name }}
@@ -760,18 +762,22 @@ function submit() {
   margin: 14px 0;
 }
 
+/* FIX-13：标签 chip 显示专属颜色——未选中淡底彩边彩字，选中实底白字（与列表 mini-tag 一致） */
 .chip {
-  border: 1px solid var(--border);
-  background: #fff;
+  border: 1px solid color-mix(in srgb, var(--tag) 45%, white);
+  background: color-mix(in srgb, var(--tag) 10%, white);
+  color: color-mix(in srgb, var(--tag) 75%, black);
   border-radius: 999px;
   padding: 6px 12px;
   font-size: 12px;
+  cursor: pointer;
 }
 
 .chip.on {
-  background: var(--primary-soft);
-  border-color: #86efac;
-  color: #166534;
+  background: var(--tag);
+  border-color: var(--tag);
+  color: #fff;
+  font-weight: 600;
 }
 
 .actions {
